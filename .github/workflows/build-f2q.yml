@@ -1,9 +1,12 @@
 name: build not-kernel CI variant f2q
 
 on:
-    push:
-       branches: [ "main" ]
-    workflow_dispatch:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-kernel:
@@ -33,6 +36,7 @@ jobs:
 
       - name: Run build script
         run: |
+          chmod +x ./build-f2q.sh
           ./build-f2q.sh
 
       - name: Set Build End Time
@@ -45,29 +49,54 @@ jobs:
           seconds=$((duration % 60))
           echo "BUILD_DURATION=${minutes}m ${seconds}s" >> $GITHUB_ENV
 
+      - name: Generate Build Info
+        id: build_info
+        run: |
+          echo "BUILD_DATE=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+          echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
       - name: Upload to Telegram
         run: |
-          gitsha1=$(git rev-parse --short HEAD)
-          printf " Localversion: `cat out/include/config/kernel.release`
+          printf " Localversion: $(cat out/include/config/kernel.release)
            | Clang version: AOSP Clang 18.0.1
-           | Build Date: `date +'%d %B %Y'`
-           | Build commit hash: $gitsha1
+           | Build Date: $(date +'%d %B %Y')
+           | Build commit hash: ${{ env.SHORT_SHA }}
            | SusFS version: v2.0.0
            | KernelSU version: 33333
            | SELinux: Enforcing" >> buildDetails.txt
-          buildDetails="`cat buildDetails.txt`"
-          zip_file=$(ls not-CI-*.zip)
+          
+          buildDetails="$(cat buildDetails.txt)"
+          zip_file=$(ls not-CI-*.zip | head -n 1)
+          
           msg="*not\\-kernel* CI build for the *Galaxy Z Fold2 5G \\(f2q\\)*
           * *
           \`\`\`
           $buildDetails
           \`\`\`
-          * * "
-          file="$zip_file"
-          curl -s -F document=@$file "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
+          * * Duration: ${{ env.BUILD_DURATION }}"
+          
+          curl -s -F document=@"$zip_file" "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument" \
           -F chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
           -F "disable_web_page_preview=true" \
           -F "parse_mode=markdownv2" \
           -F caption="$msg"
 
-
+      - name: Send to GH Releases
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') != true # 태그 트리거가 아니어도 동작하게 설정 (필요시 조정)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: not-CI-*.zip
+          name: "not-kernel CI: ${{ env.BUILD_DATE }} - ${{ env.SHORT_SHA }}"
+          tag_name: "build-${{ github.run_id }}"
+          body: |
+            Automated CI Build for ${{ env.DEVICE_NAME }} (${{ env.DEVICE }})
+            
+            **Build Info**
+            - Date: ${{ env.BUILD_DATE }}
+            - Commit: ${{ env.SHORT_SHA }}
+            - Duration: ${{ env.BUILD_DURATION }}
+            
+            **Details**
+            Please check the Telegram message for detailed version info.
