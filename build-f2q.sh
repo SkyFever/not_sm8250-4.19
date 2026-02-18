@@ -43,11 +43,20 @@ make O=out ARCH=arm64 olddefconfig
 
 echo -e "\n${YELLOW}Starting compilation...${NC}\n"
 
+#make -j$(nproc --all) O=out ARCH=arm64 \
+#    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
+#    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+#    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+#    LLVM=1 LLVM_IAS=1 dtbo.img
+
 make -j$(nproc --all) O=out ARCH=arm64 \
     CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
     OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
     CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-    LLVM=1 LLVM_IAS=1 dtbo.img
+    LLVM=1 LLVM_IAS=1 dtbs
+
+echo -e "${BLUE}Generating customized dtbo.img for f2q...${NC}"
+python2 scripts/mkdtboimg.py create out/arch/arm64/boot/dtbo.img --page_size=4096 $(find out/arch/arm64/boot/dts/vendor/qcom -name "*f2q*.dtbo")
     
 make -j$(nproc --all) O=out ARCH=arm64 \
     CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
