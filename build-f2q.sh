@@ -41,6 +41,10 @@ echo -e "${YELLOW}building with: $DEFCONFIG${NC}"
 make O=out ARCH=arm64 $DEFCONFIG
 make O=out ARCH=arm64 olddefconfig
 
+echo -e "\n${BLUE}Checking CONFIG_MACH_F2Q options in out/.config:${NC}"
+grep "CONFIG_MACH_F2Q" out/.config || echo "CONFIG_MACH_F2Q options not found in out/.config"
+echo -e "${BLUE}--------------------------------------------------${NC}\n"
+
 echo -e "\n${YELLOW}Starting compilation...${NC}\n"
 
 make -j$(nproc --all) O=out ARCH=arm64 \
