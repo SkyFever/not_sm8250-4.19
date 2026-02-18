@@ -56,7 +56,7 @@ make -j$(nproc --all) O=out ARCH=arm64 \
     LLVM=1 LLVM_IAS=1 dtbs
 
 echo -e "${BLUE}Generating customized dtbo.img for f2q...${NC}"
-python2 scripts/mkdtboimg.py create out/arch/arm64/boot/dtbo.img --page_size=4096 $(find out/arch/arm64/boot/dts/vendor/qcom -name "*f2q*.dtbo")
+python3 scripts/mkdtboimg.py create out/arch/arm64/boot/dtbo.img --page_size=4096 $(find out/arch/arm64/boot/dts/vendor/qcom -name "*f2q*.dtbo")
     
 make -j$(nproc --all) O=out ARCH=arm64 \
     CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
