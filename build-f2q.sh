@@ -56,7 +56,29 @@ make -j$(nproc --all) O=out ARCH=arm64 \
     LLVM=1 LLVM_IAS=1 dtbs
 
 echo -e "${BLUE}Generating customized dtbo.img for f2q...${NC}"
-python3 scripts/mkdtboimg.py create out/arch/arm64/boot/dtbo.img --page_size=4096 $(find out/arch/arm64/boot/dts/vendor/qcom -name "*f2q*.dtbo")
+
+# Search *f2q*.dtbo in out/arch/arm64/boot/dts
+DTBO_LIST=$(find out/arch/arm64/boot/dts -name "*f2q*.dtbo" | sort)
+
+if [ -z "$DTBO_LIST" ]; then
+    echo -e "${RED}Error: No *f2q*.dtbo files found!${NC}"
+    echo "Listing .dtbo files found in out/arch/arm64/boot/dts:"
+    find out/arch/arm64/boot/dts -name "*.dtbo" | head -n 10
+    exit 1
+fi
+
+echo "Found dtbo files:"
+echo "$DTBO_LIST"
+
+# run mkdtboimg
+python3 scripts/mkdtboimg.py create "out/arch/arm64/boot/dtbo.img" --page_size=4096 $DTBO_LIST
+
+if [ $? -eq 0 ] && [ -s "out/arch/arm64/boot/dtbo.img" ]; then # -s 옵션으로 0바이트 체크
+    echo -e "${GREEN}dtbo.img generated successfully! Size: $(du -h "out/arch/arm64/boot/dtbo.img" | cut -f1)${NC}"
+else
+    echo -e "${RED}Failed to create dtbo.img or file is empty!${NC}"
+    exit 1
+fi
     
 make -j$(nproc --all) O=out ARCH=arm64 \
     CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
