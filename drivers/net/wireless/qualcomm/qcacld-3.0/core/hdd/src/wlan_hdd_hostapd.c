@@ -3637,15 +3637,6 @@ void hdd_deinit_ap_mode(struct hdd_context *hdd_ctx,
 	 * if we are being called at other times, then we can
 	 * detach the wireless device handlers
 	 */
-	if (adapter->dev) {
-		if (rtnl_held) {
-			adapter->dev->wireless_handlers = NULL;
-		} else {
-			rtnl_lock();
-			adapter->dev->wireless_handlers = NULL;
-			rtnl_unlock();
-		}
-	}
 	if (hdd_hostapd_deinit_sap_session(adapter))
 		hdd_err("Failed:hdd_hostapd_deinit_sap_session");
 
