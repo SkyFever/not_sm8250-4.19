@@ -58,7 +58,7 @@ make -j$(nproc --all) O=out ARCH=arm64 \
 echo -e "${BLUE}Generating customized dtbo.img for f2q...${NC}"
 
 # Search *f2q*.dtbo in out/arch/arm64/boot/dts
-DTBO_LIST=$(find out/arch/arm64/boot/dts -name "*f2q*.dtbo" | sort)
+DTBO_LIST=$(find out/arch/arm64/boot/dts -name "*f2q*.dtbo" -o -name "kona-sec-system-update-overlay.dtbo" | sort)
 
 if [ -z "$DTBO_LIST" ]; then
     echo -e "${RED}Error: No *f2q*.dtbo files found!${NC}"
