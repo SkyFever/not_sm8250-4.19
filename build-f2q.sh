@@ -79,13 +79,13 @@ else
     echo -e "${RED}Failed to create dtbo.img or file is empty!${NC}"
     exit 1
 fi
-    
+
 make -j$(nproc --all) O=out ARCH=arm64 \
     CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
     OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
     CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
     LLVM=1 LLVM_IAS=1 Image
-    
+
 if [ -f "$BOOT_DIR/Image" ]; then
     echo -e "${GREEN}Kernel Image found!${NC}"
 
@@ -102,7 +102,7 @@ if [ -f "$BOOT_DIR/Image" ]; then
     cd ..
 
     cp boot.img "$BOOT_DIR/boot.img"
-    
+
     if [ -d "$DTS_DIR" ]; then
         echo -e "${BLUE}Generating dtb from $DTS_DIR...${NC}"
         cat $(find "$DTS_DIR" -type f -name "*.dtb" | sort) > "$BOOT_DIR/kona.dtb"
