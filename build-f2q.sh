@@ -38,8 +38,8 @@ fi
 mkdir -p out
 echo -e "${YELLOW}building with: $DEFCONFIG${NC}"
 
-make O=out ARCH=arm64 $DEFCONFIG
-make O=out ARCH=arm64 olddefconfig
+make O=out ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- $DEFCONFIG
+make O=out ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- olddefconfig
 
 echo -e "\n${YELLOW}Starting compilation...${NC}\n"
 
@@ -80,14 +80,39 @@ else
     exit 1
 fi
     
-make -j$(nproc --all) O=out ARCH=arm64 \
-    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
-    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-    LLVM=1 LLVM_IAS=1 Image
+#make -j$(nproc --all) O=out ARCH=arm64 \
+#    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
+#    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+#    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+#    LLVM=1 LLVM_IAS=1 Image
+
+make -j$(nproc) O=out \
+    ARCH=arm64 LLVM=1 \
+    CROSS_COMPILE=aarch64-linux-gnu- \
+    CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+    KCFLAGS="-Wno-error=vla-extension" \
+    Image dtbs \
+    2>&1 | tee build.log
     
 if [ -f "$BOOT_DIR/Image" ]; then
     echo -e "${GREEN}Kernel Image found!${NC}"
+
+    mkdir -p boot_work
+    cp stock_boot.img boot_work/
+    cd boot_work
+
+    # 언팩
+    magiskboot unpack stock_boot.img
+
+    # 커널 교체
+    cp "$BOOT_DIR/Image" kernel
+
+    # 리팩
+    magiskboot repack stock_boot.img ../boot.img
+
+    cd ..
+
+    cp boot.img "$BOOT_DIR/boot.img"
     
     if [ -d "$DTS_DIR" ]; then
         echo -e "${BLUE}Generating dtb from $DTS_DIR...${NC}"
@@ -117,6 +142,7 @@ echo -e "Preparing zip...\n"
 cp "$BOOT_DIR/dtbo.img" AnyKernel3/dtbo.img
 cp "$BOOT_DIR/Image" AnyKernel3/Image
 cp "$BOOT_DIR/kona.dtb" AnyKernel3/kona.dtb
+cp "$BOOT_DIR/boot.img" AnyKernel3/boot.img
 
 cd AnyKernel3
 
