@@ -37,11 +37,6 @@
  * carefully filter out these unused bits from impacting their
  * results.
  *
- * These operations actually hold to a slightly stronger rule:
- * if you don't input any bitmaps to these ops that have some
- * unused bits set, then they won't output any set unused bits
- * in output bitmaps.
- *
  * The byte ordering of bitmaps is more natural on little
  * endian architectures.  See the big-endian headers
  * include/asm-ppc64/bitops.h and include/asm-s390/bitops.h
@@ -476,12 +471,9 @@ int bitmap_print_to_pagebuf(bool list, char *buf, const unsigned long *maskp,
 			    int nmaskbits)
 {
 	ptrdiff_t len = PAGE_SIZE - offset_in_page(buf);
-	int n = 0;
 
-	if (len > 1)
-		n = list ? scnprintf(buf, len, "%*pbl\n", nmaskbits, maskp) :
-			   scnprintf(buf, len, "%*pb\n", nmaskbits, maskp);
-	return n;
+	return list ? scnprintf(buf, len, "%*pbl\n", nmaskbits, maskp) :
+		      scnprintf(buf, len, "%*pb\n", nmaskbits, maskp);
 }
 EXPORT_SYMBOL(bitmap_print_to_pagebuf);
 

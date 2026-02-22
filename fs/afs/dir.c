@@ -1093,6 +1093,7 @@ static void afs_vnode_new_inode(struct afs_fs_cursor *fc,
 
 	vnode = AFS_FS_I(inode);
 	set_bit(AFS_VNODE_NEW_CONTENT, &vnode->flags);
+	afs_vnode_commit_status(fc, vnode, 0);
 	d_add(new_dentry, inode);
 }
 
@@ -1177,7 +1178,7 @@ static void afs_dir_remove_subdir(struct dentry *dentry)
 static int afs_rmdir(struct inode *dir, struct dentry *dentry)
 {
 	struct afs_fs_cursor fc;
-	struct afs_vnode *dvnode = AFS_FS_I(dir);
+	struct afs_vnode *dvnode = AFS_FS_I(dir), *vnode = NULL;
 	struct key *key;
 	u64 data_version = dvnode->status.data_version;
 	int ret;
@@ -1189,6 +1190,14 @@ static int afs_rmdir(struct inode *dir, struct dentry *dentry)
 	if (IS_ERR(key)) {
 		ret = PTR_ERR(key);
 		goto error;
+	}
+
+	/* Try to make sure we have a callback promise on the victim. */
+	if (d_really_is_positive(dentry)) {
+		vnode = AFS_FS_I(d_inode(dentry));
+		ret = afs_validate(vnode, key);
+		if (ret < 0)
+			goto error_key;
 	}
 
 	ret = -ERESTARTSYS;
@@ -1209,6 +1218,7 @@ static int afs_rmdir(struct inode *dir, struct dentry *dentry)
 		}
 	}
 
+error_key:
 	key_put(key);
 error:
 	return ret;

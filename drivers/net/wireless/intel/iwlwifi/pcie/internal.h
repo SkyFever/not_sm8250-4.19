@@ -17,9 +17,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.
- *
  * The full GNU General Public License is included in this distribution in the
  * file called LICENSE.
  *
@@ -458,6 +455,7 @@ struct iwl_self_init_dram {
  * @ucode_write_complete: indicates that the ucode has been copied.
  * @ucode_write_waitq: wait queue for uCode load
  * @cmd_queue - command queue number
+ * @def_rx_queue - default rx queue number
  * @rx_buf_size: Rx buffer size
  * @bc_table_dword: true if the BC table expects DWORD (as opposed to bytes)
  * @scd_set_active: should the transport configure the SCD for HCMD queue
@@ -468,7 +466,7 @@ struct iwl_self_init_dram {
  * @mutex: to protect stop_device / start_fw / start_hw
  * @cmd_in_flight: true when we have a host command in flight
  * @fw_mon_phys: physical address of the buffer for the firmware monitor
- * @fw_mon_page: points to the first page of the buffer for the firmware monitor
+ * @fw_mon_cpu_addr: address of the buffer for the firmware monitor
  * @fw_mon_size: size of the buffer for the firmware monitor
  * @msix_entries: array of MSI-X entries
  * @msix_enabled: true if managed to enable MSI-X
@@ -481,7 +479,6 @@ struct iwl_self_init_dram {
  * @fh_mask: current unmasked fh causes
  * @hw_mask: current unmasked hw causes
  * @in_rescan: true if we have triggered a device rescan
- * @scheduled_for_removal: true if we have scheduled a device removal
  */
 struct iwl_trans_pcie {
 	struct iwl_rxq *rxq;
@@ -539,6 +536,7 @@ struct iwl_trans_pcie {
 	u8 page_offs, dev_cmd_offs;
 
 	u8 cmd_queue;
+	u8 def_rx_queue;
 	u8 cmd_fifo;
 	unsigned int cmd_q_wdg_timeout;
 	u8 n_no_reclaim_cmds;
@@ -559,7 +557,7 @@ struct iwl_trans_pcie {
 	bool ref_cmd_in_flight;
 
 	dma_addr_t fw_mon_phys;
-	struct page *fw_mon_page;
+	void *fw_mon_cpu_addr;
 	u32 fw_mon_size;
 
 	struct msix_entry msix_entries[IWL_MAX_RX_HW_QUEUES];
@@ -574,7 +572,6 @@ struct iwl_trans_pcie {
 	cpumask_t affinity_mask[IWL_MAX_RX_HW_QUEUES];
 	u16 tx_cmd_queue_size;
 	bool in_rescan;
-	bool scheduled_for_removal;
 };
 
 static inline struct iwl_trans_pcie *
@@ -616,6 +613,7 @@ void iwl_trans_pcie_free(struct iwl_trans *trans);
 /*****************************************************
 * RX
 ******************************************************/
+int _iwl_pcie_rx_init(struct iwl_trans *trans);
 int iwl_pcie_rx_init(struct iwl_trans *trans);
 int iwl_pcie_gen2_rx_init(struct iwl_trans *trans);
 irqreturn_t iwl_pcie_msix_isr(int irq, void *data);
@@ -629,6 +627,7 @@ void iwl_pcie_rx_init_rxb_lists(struct iwl_rxq *rxq);
 int iwl_pcie_dummy_napi_poll(struct napi_struct *napi, int budget);
 void iwl_pcie_rxq_alloc_rbs(struct iwl_trans *trans, gfp_t priority,
 			    struct iwl_rxq *rxq);
+int iwl_pcie_rx_alloc(struct iwl_trans *trans);
 
 /*****************************************************
 * ICT - interrupt handling
@@ -643,7 +642,8 @@ void iwl_pcie_disable_ict(struct iwl_trans *trans);
 * TX / HCMD
 ******************************************************/
 int iwl_pcie_tx_init(struct iwl_trans *trans);
-int iwl_pcie_gen2_tx_init(struct iwl_trans *trans);
+int iwl_pcie_gen2_tx_init(struct iwl_trans *trans, int txq_id,
+			  int queue_size);
 void iwl_pcie_tx_start(struct iwl_trans *trans, u32 scd_base_addr);
 int iwl_pcie_tx_stop(struct iwl_trans *trans);
 void iwl_pcie_tx_free(struct iwl_trans *trans);
@@ -660,11 +660,17 @@ int iwl_trans_pcie_tx(struct iwl_trans *trans, struct sk_buff *skb,
 		      struct iwl_device_cmd *dev_cmd, int txq_id);
 void iwl_pcie_txq_check_wrptrs(struct iwl_trans *trans);
 int iwl_trans_pcie_send_hcmd(struct iwl_trans *trans, struct iwl_host_cmd *cmd);
+void iwl_pcie_cmdq_reclaim(struct iwl_trans *trans, int txq_id, int idx);
+void iwl_pcie_gen2_txq_inc_wr_ptr(struct iwl_trans *trans,
+				  struct iwl_txq *txq);
 void iwl_pcie_hcmd_complete(struct iwl_trans *trans,
 			    struct iwl_rx_cmd_buffer *rxb);
 void iwl_trans_pcie_reclaim(struct iwl_trans *trans, int txq_id, int ssn,
 			    struct sk_buff_head *skbs);
 void iwl_trans_pcie_tx_reset(struct iwl_trans *trans);
+void iwl_pcie_gen2_update_byte_tbl(struct iwl_trans_pcie *trans_pcie,
+				   struct iwl_txq *txq, u16 byte_cnt,
+				   int num_tbs);
 
 static inline u16 iwl_pcie_tfd_tb_get_len(struct iwl_trans *trans, void *_tfd,
 					  u8 idx)
@@ -1009,6 +1015,7 @@ static inline void __iwl_trans_pcie_set_bit(struct iwl_trans *trans,
 }
 
 void iwl_trans_pcie_rf_kill(struct iwl_trans *trans, bool state);
+void iwl_trans_pcie_dump_regs(struct iwl_trans *trans);
 
 #ifdef CONFIG_IWLWIFI_DEBUGFS
 int iwl_trans_pcie_dbgfs_register(struct iwl_trans *trans);
@@ -1027,6 +1034,7 @@ void iwl_pcie_enable_rx_wake(struct iwl_trans *trans, bool enable);
 void iwl_pcie_rx_allocator_work(struct work_struct *data);
 
 /* common functions that are used by gen2 transport */
+int iwl_pcie_gen2_apm_init(struct iwl_trans *trans);
 void iwl_pcie_apm_config(struct iwl_trans *trans);
 int iwl_pcie_prepare_card_hw(struct iwl_trans *trans);
 void iwl_pcie_synchronize_irqs(struct iwl_trans *trans);
@@ -1058,8 +1066,16 @@ void iwl_pcie_alloc_fw_monitor(struct iwl_trans *trans, u8 max_power);
 int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 				 const struct fw_img *fw, bool run_in_rfkill);
 void iwl_trans_pcie_gen2_fw_alive(struct iwl_trans *trans, u32 scd_addr);
+void iwl_pcie_gen2_txq_free_memory(struct iwl_trans *trans,
+				   struct iwl_txq *txq);
+int iwl_trans_pcie_dyn_txq_alloc_dma(struct iwl_trans *trans,
+				     struct iwl_txq **intxq, int size,
+				     unsigned int timeout);
+int iwl_trans_pcie_txq_alloc_response(struct iwl_trans *trans,
+				      struct iwl_txq *txq,
+				      struct iwl_host_cmd *hcmd);
 int iwl_trans_pcie_dyn_txq_alloc(struct iwl_trans *trans,
-				 struct iwl_tx_queue_cfg_cmd *cmd,
+				 __le16 flags, u8 sta_id, u8 tid,
 				 int cmd_id, int size,
 				 unsigned int timeout);
 void iwl_trans_pcie_dyn_txq_free(struct iwl_trans *trans, int queue);

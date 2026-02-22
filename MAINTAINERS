@@ -845,7 +845,7 @@ ANALOG DEVICES INC ADGS1408 DRIVER
 M:	Mircea Caprioru <mircea.caprioru@analog.com>
 S:	Supported
 F:	drivers/mux/adgs1408.c
-F:	Documentation/devicetree/bindings/mux/adgs1408.txt
+F:	Documentation/devicetree/bindings/mux/adi,adgs1408.txt
 
 ANALOG DEVICES INC ADP5061 DRIVER
 M:	Stefan Popa <stefan.popa@analog.com>
@@ -3132,6 +3132,15 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/memory-controllers/brcm,dpfe-cpu.txt
 F:	drivers/memory/brcmstb_dpfe.c
 
+BROADCOM SPI DRIVER
+M:	Kamal Dasu <kdasu.kdev@gmail.com>
+M:	bcm-kernel-feedback-list@broadcom.com
+S:	Maintained
+F:	Documentation/devicetree/bindings/spi/brcm,spi-bcm-qspi.txt
+F:	drivers/spi/spi-bcm-qspi.*
+F:	drivers/spi/spi-brcmstb-qspi.c
+F:	drivers/spi/spi-iproc-qspi.c
+
 BROADCOM SYSTEMPORT ETHERNET DRIVER
 M:	Florian Fainelli <f.fainelli@gmail.com>
 L:	netdev@vger.kernel.org
@@ -3185,7 +3194,7 @@ F:	drivers/gpio/gpio-bt8xx.c
 
 BTRFS FILE SYSTEM
 M:	Chris Mason <clm@fb.com>
-M:	Josef Bacik <jbacik@fb.com>
+M:	Josef Bacik <josef@toxicpanda.com>
 M:	David Sterba <dsterba@suse.com>
 L:	linux-btrfs@vger.kernel.org
 W:	http://btrfs.wiki.kernel.org/
@@ -3848,7 +3857,6 @@ W:	http://www.arm.com/products/processors/technologies/biglittleprocessing.php
 S:	Maintained
 F:	drivers/cpufreq/arm_big_little.h
 F:	drivers/cpufreq/arm_big_little.c
-F:	drivers/cpufreq/arm_big_little_dt.c
 
 CPU POWER MONITORING SUBSYSTEM
 M:	Thomas Renninger <trenn@suse.com>
@@ -4109,7 +4117,7 @@ D-LINK DIR-685 TOUCHKEYS DRIVER
 M:	Linus Walleij <linus.walleij@linaro.org>
 L:	linux-input@vger.kernel.org
 S:	Supported
-F:	drivers/input/dlink-dir685-touchkeys.c
+F:	drivers/input/keyboard/dlink-dir685-touchkeys.c
 
 DALLAS/MAXIM DS1685-FAMILY REAL TIME CLOCK
 M:	Joshua Kinard <kumba@gentoo.org>
@@ -4513,11 +4521,12 @@ S:	Maintained
 F:	Documentation/
 F:	scripts/kernel-doc
 X:	Documentation/ABI/
+X:	Documentation/acpi/
 X:	Documentation/devicetree/
-X:	Documentation/acpi
-X:	Documentation/power
-X:	Documentation/spi
-X:	Documentation/media
+X:	Documentation/i2c/
+X:	Documentation/media/
+X:	Documentation/power/
+X:	Documentation/spi/
 T:	git git://git.lwn.net/linux.git docs-next
 
 DOCUMENTATION/ITALIAN
@@ -5560,7 +5569,7 @@ W:	http://ext4.wiki.kernel.org
 Q:	http://patchwork.ozlabs.org/project/linux-ext4/list/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/tytso/ext4.git
 S:	Maintained
-F:	Documentation/filesystems/ext4.txt
+F:	Documentation/filesystems/ext4/ext4.rst
 F:	fs/ext4/
 
 Extended Verification Module (EVM)
@@ -6516,6 +6525,7 @@ F:	Documentation/devicetree/bindings/hwmon/
 F:	Documentation/hwmon/
 F:	drivers/hwmon/
 F:	include/linux/hwmon*.h
+F:	include/trace/events/hwmon*.h
 
 HARDWARE RANDOM NUMBER GENERATOR CORE
 M:	Matt Mackall <mpm@selenic.com>
@@ -8941,13 +8951,6 @@ S:	Maintained
 F:	Documentation/hwmon/max16065
 F:	drivers/hwmon/max16065.c
 
-MAX20751 HARDWARE MONITOR DRIVER
-M:	Guenter Roeck <linux@roeck-us.net>
-L:	linux-hwmon@vger.kernel.org
-S:	Maintained
-F:	Documentation/hwmon/max20751
-F:	drivers/hwmon/max20751.c
-
 MAX2175 SDR TUNER DRIVER
 M:	Ramesh Shanmugasundaram <ramesh.shanmugasundaram@bp.renesas.com>
 L:	linux-media@vger.kernel.org
@@ -10279,6 +10282,8 @@ NETWORKING [TLS]
 M:	Boris Pismenny <borisp@mellanox.com>
 M:	Aviad Yehezkel <aviadye@mellanox.com>
 M:	Dave Watson <davejwatson@fb.com>
+M:	John Fastabend <john.fastabend@gmail.com>
+M:	Daniel Borkmann <daniel@iogearbox.net>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	net/tls/*
@@ -11676,7 +11681,26 @@ W:	http://hwmon.wiki.kernel.org/
 W:	http://www.roeck-us.net/linux/drivers/
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/groeck/linux-staging.git
 S:	Maintained
+F:	Documentation/devicetree/bindings/hwmon/ibm,cffps1.txt
+F:	Documentation/devicetree/bindings/hwmon/max31785.txt
+F:	Documentation/devicetree/bindings/hwmon/ltc2978.txt
+F:	Documentation/hwmon/adm1275
+F:	Documentation/hwmon/ibm-cffps
+F:	Documentation/hwmon/ir35221
+F:	Documentation/hwmon/lm25066
+F:	Documentation/hwmon/ltc2978
+F:	Documentation/hwmon/ltc3815
+F:	Documentation/hwmon/max16064
+F:	Documentation/hwmon/max20751
+F:	Documentation/hwmon/max31785
+F:	Documentation/hwmon/max34440
+F:	Documentation/hwmon/max8688
 F:	Documentation/hwmon/pmbus
+F:	Documentation/hwmon/pmbus-core
+F:	Documentation/hwmon/tps40422
+F:	Documentation/hwmon/ucd9000
+F:	Documentation/hwmon/ucd9200
+F:	Documentation/hwmon/zl6100
 F:	drivers/hwmon/pmbus/
 F:	include/linux/pmbus.h
 
@@ -16126,6 +16150,7 @@ F:	arch/arm64/include/asm/xen/
 XEN HYPERVISOR INTERFACE
 M:	Boris Ostrovsky <boris.ostrovsky@oracle.com>
 M:	Juergen Gross <jgross@suse.com>
+R:	Stefano Stabellini <sstabellini@kernel.org>
 L:	xen-devel@lists.xenproject.org (moderated for non-subscribers)
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/xen/tip.git
 S:	Supported

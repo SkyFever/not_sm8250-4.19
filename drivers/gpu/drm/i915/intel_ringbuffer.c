@@ -571,6 +571,8 @@ static int init_ring_common(struct intel_engine_cs *engine)
 	if (INTEL_GEN(dev_priv) > 2)
 		I915_WRITE_MODE(engine, _MASKED_BIT_DISABLE(STOP_RING));
 
+	/* Papering over lost _interrupts_ immediately following the restart */
+	intel_engine_wakeup(engine);
 out:
 	intel_uncore_forcewake_put(dev_priv, FORCEWAKE_ALL);
 
@@ -1079,7 +1081,7 @@ int intel_ring_pin(struct intel_ring *ring,
 			return ret;
 	}
 
-	ret = i915_vma_pin(vma, 0, PAGE_SIZE, flags);
+	ret = i915_vma_pin(vma, 0, 0, flags);
 	if (unlikely(ret))
 		return ret;
 
@@ -1265,8 +1267,7 @@ static int __context_pin(struct intel_context *ce)
 			return err;
 	}
 
-	err = i915_vma_pin(vma, 0, I915_GTT_MIN_ALIGNMENT,
-			   PIN_GLOBAL | PIN_HIGH);
+	err = i915_vma_pin(vma, 0, 0, PIN_GLOBAL | PIN_HIGH);
 	if (err)
 		return err;
 

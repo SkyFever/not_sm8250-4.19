@@ -4432,6 +4432,7 @@ should_reclaim_retry(gfp_t gfp_mask, unsigned order,
 {
 	struct zone *zone;
 	struct zoneref *z;
+	bool ret = false;
 
 	/*
 	 * Costly allocations might have made a progress but this doesn't mean
@@ -4495,25 +4496,24 @@ should_reclaim_retry(gfp_t gfp_mask, unsigned order,
 				}
 			}
 
-			/*
-			 * Memory allocation/reclaim might be called from a WQ
-			 * context and the current implementation of the WQ
-			 * concurrency control doesn't recognize that
-			 * a particular WQ is congested if the worker thread is
-			 * looping without ever sleeping. Therefore we have to
-			 * do a short sleep here rather than calling
-			 * cond_resched().
-			 */
-			if (current->flags & PF_WQ_WORKER)
-				schedule_timeout_uninterruptible(1);
-			else
-				cond_resched();
-
-			return true;
+			ret = true;
+			goto out;
 		}
 	}
 
-	return false;
+out:
+	/*
+	 * Memory allocation/reclaim might be called from a WQ context and the
+	 * current implementation of the WQ concurrency control doesn't
+	 * recognize that a particular WQ is congested if the worker thread is
+	 * looping without ever sleeping. Therefore we have to do a short sleep
+	 * here rather than calling cond_resched().
+	 */
+	if (current->flags & PF_WQ_WORKER)
+		schedule_timeout_uninterruptible(1);
+	else
+		cond_resched();
+	return ret;
 }
 
 static inline bool
@@ -7475,15 +7475,12 @@ static void check_for_memory(pg_data_t *pgdat, int nid)
 {
 	enum zone_type zone_type;
 
-	if (N_MEMORY == N_NORMAL_MEMORY)
-		return;
-
 	for (zone_type = 0; zone_type <= ZONE_MOVABLE - 1; zone_type++) {
 		struct zone *zone = &pgdat->node_zones[zone_type];
 		if (populated_zone(zone)) {
-			node_set_state(nid, N_HIGH_MEMORY);
-			if (N_NORMAL_MEMORY != N_HIGH_MEMORY &&
-			    zone_type <= ZONE_NORMAL)
+			if (IS_ENABLED(CONFIG_HIGHMEM))
+				node_set_state(nid, N_HIGH_MEMORY);
+			if (zone_type <= ZONE_NORMAL)
 				node_set_state(nid, N_NORMAL_MEMORY);
 			break;
 		}

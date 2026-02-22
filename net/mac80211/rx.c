@@ -115,7 +115,8 @@ static inline bool should_drop_frame(struct sk_buff *skb, int present_fcs_len,
 
 	if (status->flag & (RX_FLAG_FAILED_FCS_CRC |
 			    RX_FLAG_FAILED_PLCP_CRC |
-			    RX_FLAG_ONLY_MONITOR))
+			    RX_FLAG_ONLY_MONITOR |
+			    RX_FLAG_NO_PSDU))
 		return true;
 
 	if (unlikely(skb->len < 16 + present_fcs_len + rtap_space))
@@ -190,6 +191,15 @@ ieee80211_rx_radiotap_hdrlen(struct ieee80211_local *local,
 		len = ALIGN(len, 2);
 		len += 12;
 		BUILD_BUG_ON(sizeof(struct ieee80211_radiotap_he_mu) != 12);
+	}
+
+	if (status->flag & RX_FLAG_NO_PSDU)
+		len += 1;
+
+	if (status->flag & RX_FLAG_RADIOTAP_LSIG) {
+		len = ALIGN(len, 2);
+		len += 4;
+		BUILD_BUG_ON(sizeof(struct ieee80211_radiotap_lsig) != 4);
 	}
 
 	if (status->chains) {
@@ -280,6 +290,7 @@ ieee80211_add_rx_radiotap_header(struct ieee80211_local *local,
 	struct ieee80211_vendor_radiotap rtap = {};
 	struct ieee80211_radiotap_he he = {};
 	struct ieee80211_radiotap_he_mu he_mu = {};
+	struct ieee80211_radiotap_lsig lsig = {};
 
 	if (status->flag & RX_FLAG_RADIOTAP_HE) {
 		he = *(struct ieee80211_radiotap_he *)skb->data;
@@ -290,6 +301,11 @@ ieee80211_add_rx_radiotap_header(struct ieee80211_local *local,
 	if (status->flag & RX_FLAG_RADIOTAP_HE_MU) {
 		he_mu = *(struct ieee80211_radiotap_he_mu *)skb->data;
 		skb_pull(skb, sizeof(he_mu));
+	}
+
+	if (status->flag & RX_FLAG_RADIOTAP_LSIG) {
+		lsig = *(struct ieee80211_radiotap_lsig *)skb->data;
+		skb_pull(skb, sizeof(lsig));
 	}
 
 	if (status->flag & RX_FLAG_RADIOTAP_VENDOR_DATA) {
@@ -550,7 +566,7 @@ ieee80211_add_rx_radiotap_header(struct ieee80211_local *local,
 
 	if (status->encoding == RX_ENC_HE &&
 	    status->flag & RX_FLAG_RADIOTAP_HE) {
-#define HE_PREP(f, val)	cpu_to_le16(FIELD_PREP(IEEE80211_RADIOTAP_HE_##f, val))
+#define HE_PREP(f, val)	le16_encode_bits(val, IEEE80211_RADIOTAP_HE_##f)
 
 		if (status->enc_flags & RX_ENC_FLAG_STBC_MASK) {
 			he.data6 |= HE_PREP(DATA6_NSTS,
@@ -629,6 +645,21 @@ ieee80211_add_rx_radiotap_header(struct ieee80211_local *local,
 		rthdr->it_present |= cpu_to_le32(1 << IEEE80211_RADIOTAP_HE_MU);
 		memcpy(pos, &he_mu, sizeof(he_mu));
 		pos += sizeof(he_mu);
+	}
+
+	if (status->flag & RX_FLAG_NO_PSDU) {
+		rthdr->it_present |=
+			cpu_to_le32(1 << IEEE80211_RADIOTAP_ZERO_LEN_PSDU);
+		*pos++ = status->zero_length_psdu_type;
+	}
+
+	if (status->flag & RX_FLAG_RADIOTAP_LSIG) {
+		/* ensure 2 byte alignment */
+		while ((pos - (u8 *)rthdr) & 1)
+			pos++;
+		rthdr->it_present |= cpu_to_le32(1 << IEEE80211_RADIOTAP_LSIG);
+		memcpy(pos, &lsig, sizeof(lsig));
+		pos += sizeof(lsig);
 	}
 
 	for_each_set_bit(chain, &chains, IEEE80211_MAX_CHAINS) {
@@ -1505,7 +1536,7 @@ static void sta_ps_start(struct sta_info *sta)
 	if (!sta->sta.txq[0])
 		return;
 
-	for (tid = 0; tid < ARRAY_SIZE(sta->sta.txq); tid++) {
+	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
 		if (txq_has_queue(sta->sta.txq[tid]))
 			set_bit(tid, &sta->txq_buffered_tids);
 		else
@@ -2060,6 +2091,7 @@ ieee80211_reassemble_find(struct ieee80211_fragment_cache *cache,
 	idx = cache->next;
 	for (i = 0; i < IEEE80211_FRAGMENT_MAX; i++) {
 		struct ieee80211_hdr *f_hdr;
+		struct sk_buff *f_skb;
 
 		idx--;
 		if (idx < 0)
@@ -2071,7 +2103,8 @@ ieee80211_reassemble_find(struct ieee80211_fragment_cache *cache,
 		    entry->last_frag + 1 != frag)
 			continue;
 
-		f_hdr = (struct ieee80211_hdr *)entry->skb_list.next->data;
+		f_skb = __skb_peek(&entry->skb_list);
+		f_hdr = (struct ieee80211_hdr *) f_skb->data;
 
 		/*
 		 * Check ftype and addresses are equal, else check next fragment
@@ -2382,7 +2415,7 @@ __ieee80211_data_to_8023(struct ieee80211_rx_data *rx, bool *port_control)
 
 		if (!sdata->u.mgd.use_4addr)
 			return -1;
-		else
+		else if (!ether_addr_equal(hdr->addr1, sdata->vif.addr))
 			check_port_control = true;
 	}
 

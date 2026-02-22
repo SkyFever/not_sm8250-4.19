@@ -125,7 +125,7 @@ ice_aq_manage_mac_read(struct ice_hw *hw, void *buf, u16 buf_size,
  *
  * Returns the various PHY capabilities supported on the Port (0x0600)
  */
-static enum ice_status
+enum ice_status
 ice_aq_get_phy_caps(struct ice_port_info *pi, bool qual_mods, u8 report_mode,
 		    struct ice_aqc_get_phy_caps_data *pcaps,
 		    struct ice_sq_cd *cd)
@@ -388,20 +388,7 @@ static enum ice_status ice_init_fltr_mgmt_struct(struct ice_hw *hw)
 
 	INIT_LIST_HEAD(&sw->vsi_list_map_head);
 
-	mutex_init(&sw->mac_list_lock);
-	INIT_LIST_HEAD(&sw->mac_list_head);
-
-	mutex_init(&sw->vlan_list_lock);
-	INIT_LIST_HEAD(&sw->vlan_list_head);
-
-	mutex_init(&sw->eth_m_list_lock);
-	INIT_LIST_HEAD(&sw->eth_m_list_head);
-
-	mutex_init(&sw->promisc_list_lock);
-	INIT_LIST_HEAD(&sw->promisc_list_head);
-
-	mutex_init(&sw->mac_vlan_list_lock);
-	INIT_LIST_HEAD(&sw->mac_vlan_list_head);
+	ice_init_def_sw_recp(hw);
 
 	return 0;
 }
@@ -415,20 +402,199 @@ static void ice_cleanup_fltr_mgmt_struct(struct ice_hw *hw)
 	struct ice_switch_info *sw = hw->switch_info;
 	struct ice_vsi_list_map_info *v_pos_map;
 	struct ice_vsi_list_map_info *v_tmp_map;
+	struct ice_sw_recipe *recps;
+	u8 i;
 
 	list_for_each_entry_safe(v_pos_map, v_tmp_map, &sw->vsi_list_map_head,
 				 list_entry) {
 		list_del(&v_pos_map->list_entry);
 		devm_kfree(ice_hw_to_dev(hw), v_pos_map);
 	}
+	recps = hw->switch_info->recp_list;
+	for (i = 0; i < ICE_SW_LKUP_LAST; i++) {
+		struct ice_fltr_mgmt_list_entry *lst_itr, *tmp_entry;
 
-	mutex_destroy(&sw->mac_list_lock);
-	mutex_destroy(&sw->vlan_list_lock);
-	mutex_destroy(&sw->eth_m_list_lock);
-	mutex_destroy(&sw->promisc_list_lock);
-	mutex_destroy(&sw->mac_vlan_list_lock);
+		recps[i].root_rid = i;
+		mutex_destroy(&recps[i].filt_rule_lock);
+		list_for_each_entry_safe(lst_itr, tmp_entry,
+					 &recps[i].filt_rules, list_entry) {
+			list_del(&lst_itr->list_entry);
+			devm_kfree(ice_hw_to_dev(hw), lst_itr);
+		}
+	}
 
+	devm_kfree(ice_hw_to_dev(hw), sw->recp_list);
 	devm_kfree(ice_hw_to_dev(hw), sw);
+}
+
+#define ICE_FW_LOG_DESC_SIZE(n)	(sizeof(struct ice_aqc_fw_logging_data) + \
+	(((n) - 1) * sizeof(((struct ice_aqc_fw_logging_data *)0)->entry)))
+#define ICE_FW_LOG_DESC_SIZE_MAX	\
+	ICE_FW_LOG_DESC_SIZE(ICE_AQC_FW_LOG_ID_MAX)
+
+/**
+ * ice_cfg_fw_log - configure FW logging
+ * @hw: pointer to the hw struct
+ * @enable: enable certain FW logging events if true, disable all if false
+ *
+ * This function enables/disables the FW logging via Rx CQ events and a UART
+ * port based on predetermined configurations. FW logging via the Rx CQ can be
+ * enabled/disabled for individual PF's. However, FW logging via the UART can
+ * only be enabled/disabled for all PFs on the same device.
+ *
+ * To enable overall FW logging, the "cq_en" and "uart_en" enable bits in
+ * hw->fw_log need to be set accordingly, e.g. based on user-provided input,
+ * before initializing the device.
+ *
+ * When re/configuring FW logging, callers need to update the "cfg" elements of
+ * the hw->fw_log.evnts array with the desired logging event configurations for
+ * modules of interest. When disabling FW logging completely, the callers can
+ * just pass false in the "enable" parameter. On completion, the function will
+ * update the "cur" element of the hw->fw_log.evnts array with the resulting
+ * logging event configurations of the modules that are being re/configured. FW
+ * logging modules that are not part of a reconfiguration operation retain their
+ * previous states.
+ *
+ * Before resetting the device, it is recommended that the driver disables FW
+ * logging before shutting down the control queue. When disabling FW logging
+ * ("enable" = false), the latest configurations of FW logging events stored in
+ * hw->fw_log.evnts[] are not overridden to allow them to be reconfigured after
+ * a device reset.
+ *
+ * When enabling FW logging to emit log messages via the Rx CQ during the
+ * device's initialization phase, a mechanism alternative to interrupt handlers
+ * needs to be used to extract FW log messages from the Rx CQ periodically and
+ * to prevent the Rx CQ from being full and stalling other types of control
+ * messages from FW to SW. Interrupts are typically disabled during the device's
+ * initialization phase.
+ */
+static enum ice_status ice_cfg_fw_log(struct ice_hw *hw, bool enable)
+{
+	struct ice_aqc_fw_logging_data *data = NULL;
+	struct ice_aqc_fw_logging *cmd;
+	enum ice_status status = 0;
+	u16 i, chgs = 0, len = 0;
+	struct ice_aq_desc desc;
+	u8 actv_evnts = 0;
+	void *buf = NULL;
+
+	if (!hw->fw_log.cq_en && !hw->fw_log.uart_en)
+		return 0;
+
+	/* Disable FW logging only when the control queue is still responsive */
+	if (!enable &&
+	    (!hw->fw_log.actv_evnts || !ice_check_sq_alive(hw, &hw->adminq)))
+		return 0;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_fw_logging);
+	cmd = &desc.params.fw_logging;
+
+	/* Indicate which controls are valid */
+	if (hw->fw_log.cq_en)
+		cmd->log_ctrl_valid |= ICE_AQC_FW_LOG_AQ_VALID;
+
+	if (hw->fw_log.uart_en)
+		cmd->log_ctrl_valid |= ICE_AQC_FW_LOG_UART_VALID;
+
+	if (enable) {
+		/* Fill in an array of entries with FW logging modules and
+		 * logging events being reconfigured.
+		 */
+		for (i = 0; i < ICE_AQC_FW_LOG_ID_MAX; i++) {
+			u16 val;
+
+			/* Keep track of enabled event types */
+			actv_evnts |= hw->fw_log.evnts[i].cfg;
+
+			if (hw->fw_log.evnts[i].cfg == hw->fw_log.evnts[i].cur)
+				continue;
+
+			if (!data) {
+				data = devm_kzalloc(ice_hw_to_dev(hw),
+						    ICE_FW_LOG_DESC_SIZE_MAX,
+						    GFP_KERNEL);
+				if (!data)
+					return ICE_ERR_NO_MEMORY;
+			}
+
+			val = i << ICE_AQC_FW_LOG_ID_S;
+			val |= hw->fw_log.evnts[i].cfg << ICE_AQC_FW_LOG_EN_S;
+			data->entry[chgs++] = cpu_to_le16(val);
+		}
+
+		/* Only enable FW logging if at least one module is specified.
+		 * If FW logging is currently enabled but all modules are not
+		 * enabled to emit log messages, disable FW logging altogether.
+		 */
+		if (actv_evnts) {
+			/* Leave if there is effectively no change */
+			if (!chgs)
+				goto out;
+
+			if (hw->fw_log.cq_en)
+				cmd->log_ctrl |= ICE_AQC_FW_LOG_AQ_EN;
+
+			if (hw->fw_log.uart_en)
+				cmd->log_ctrl |= ICE_AQC_FW_LOG_UART_EN;
+
+			buf = data;
+			len = ICE_FW_LOG_DESC_SIZE(chgs);
+			desc.flags |= cpu_to_le16(ICE_AQ_FLAG_RD);
+		}
+	}
+
+	status = ice_aq_send_cmd(hw, &desc, buf, len, NULL);
+	if (!status) {
+		/* Update the current configuration to reflect events enabled.
+		 * hw->fw_log.cq_en and hw->fw_log.uart_en indicate if the FW
+		 * logging mode is enabled for the device. They do not reflect
+		 * actual modules being enabled to emit log messages. So, their
+		 * values remain unchanged even when all modules are disabled.
+		 */
+		u16 cnt = enable ? chgs : (u16)ICE_AQC_FW_LOG_ID_MAX;
+
+		hw->fw_log.actv_evnts = actv_evnts;
+		for (i = 0; i < cnt; i++) {
+			u16 v, m;
+
+			if (!enable) {
+				/* When disabling all FW logging events as part
+				 * of device's de-initialization, the original
+				 * configurations are retained, and can be used
+				 * to reconfigure FW logging later if the device
+				 * is re-initialized.
+				 */
+				hw->fw_log.evnts[i].cur = 0;
+				continue;
+			}
+
+			v = le16_to_cpu(data->entry[i]);
+			m = (v & ICE_AQC_FW_LOG_ID_M) >> ICE_AQC_FW_LOG_ID_S;
+			hw->fw_log.evnts[m].cur = hw->fw_log.evnts[m].cfg;
+		}
+	}
+
+out:
+	if (data)
+		devm_kfree(ice_hw_to_dev(hw), data);
+
+	return status;
+}
+
+/**
+ * ice_output_fw_log
+ * @hw: pointer to the hw struct
+ * @desc: pointer to the AQ message descriptor
+ * @buf: pointer to the buffer accompanying the AQ message
+ *
+ * Formats a FW Log message and outputs it via the standard driver logs.
+ */
+void ice_output_fw_log(struct ice_hw *hw, struct ice_aq_desc *desc, void *buf)
+{
+	ice_debug(hw, ICE_DBG_AQ_MSG, "[ FW Log Msg Start ]\n");
+	ice_debug_array(hw, ICE_DBG_AQ_MSG, 16, 1, (u8 *)buf,
+			le16_to_cpu(desc->datalen));
+	ice_debug(hw, ICE_DBG_AQ_MSG, "[ FW Log Msg End ]\n");
 }
 
 /**
@@ -464,6 +630,11 @@ enum ice_status ice_init_hw(struct ice_hw *hw)
 	status = ice_init_all_ctrlq(hw);
 	if (status)
 		goto err_unroll_cqinit;
+
+	/* Enable FW logging. Not fatal if this fails. */
+	status = ice_cfg_fw_log(hw, true);
+	if (status)
+		ice_debug(hw, ICE_DBG_INIT, "Failed to enable FW logging.\n");
 
 	status = ice_clear_pf_cfg(hw);
 	if (status)
@@ -527,6 +698,13 @@ enum ice_status ice_init_hw(struct ice_hw *hw)
 	if (status)
 		goto err_unroll_sched;
 
+	/* need a valid SW entry point to build a Tx tree */
+	if (!hw->sw_entry_point_layer) {
+		ice_debug(hw, ICE_DBG_SCHED, "invalid sw entry point\n");
+		status = ICE_ERR_CFG;
+		goto err_unroll_sched;
+	}
+
 	status = ice_init_fltr_mgmt_struct(hw);
 	if (status)
 		goto err_unroll_sched;
@@ -571,15 +749,18 @@ err_unroll_cqinit:
  */
 void ice_deinit_hw(struct ice_hw *hw)
 {
+	ice_cleanup_fltr_mgmt_struct(hw);
+
 	ice_sched_cleanup_all(hw);
-	ice_shutdown_all_ctrlq(hw);
 
 	if (hw->port_info) {
 		devm_kfree(ice_hw_to_dev(hw), hw->port_info);
 		hw->port_info = NULL;
 	}
 
-	ice_cleanup_fltr_mgmt_struct(hw);
+	/* Attempt to disable FW logging before shutting down control queues */
+	ice_cfg_fw_log(hw, false);
+	ice_shutdown_all_ctrlq(hw);
 }
 
 /**
@@ -708,6 +889,8 @@ enum ice_status ice_reset(struct ice_hw *hw, enum ice_reset_req req)
 		ice_debug(hw, ICE_DBG_INIT, "GlobalR requested\n");
 		val = GLGEN_RTRIG_GLOBR_M;
 		break;
+	default:
+		return ICE_ERR_PARAM;
 	}
 
 	val |= rd32(hw, GLGEN_RTRIG);
@@ -1404,6 +1587,110 @@ void ice_clear_pxe_mode(struct ice_hw *hw)
 }
 
 /**
+ * ice_get_link_speed_based_on_phy_type - returns link speed
+ * @phy_type_low: lower part of phy_type
+ *
+ * This helper function will convert a phy_type_low to its corresponding link
+ * speed.
+ * Note: In the structure of phy_type_low, there should be one bit set, as
+ * this function will convert one phy type to its speed.
+ * If no bit gets set, ICE_LINK_SPEED_UNKNOWN will be returned
+ * If more than one bit gets set, ICE_LINK_SPEED_UNKNOWN will be returned
+ */
+static u16
+ice_get_link_speed_based_on_phy_type(u64 phy_type_low)
+{
+	u16 speed_phy_type_low = ICE_AQ_LINK_SPEED_UNKNOWN;
+
+	switch (phy_type_low) {
+	case ICE_PHY_TYPE_LOW_100BASE_TX:
+	case ICE_PHY_TYPE_LOW_100M_SGMII:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_100MB;
+		break;
+	case ICE_PHY_TYPE_LOW_1000BASE_T:
+	case ICE_PHY_TYPE_LOW_1000BASE_SX:
+	case ICE_PHY_TYPE_LOW_1000BASE_LX:
+	case ICE_PHY_TYPE_LOW_1000BASE_KX:
+	case ICE_PHY_TYPE_LOW_1G_SGMII:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_1000MB;
+		break;
+	case ICE_PHY_TYPE_LOW_2500BASE_T:
+	case ICE_PHY_TYPE_LOW_2500BASE_X:
+	case ICE_PHY_TYPE_LOW_2500BASE_KX:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_2500MB;
+		break;
+	case ICE_PHY_TYPE_LOW_5GBASE_T:
+	case ICE_PHY_TYPE_LOW_5GBASE_KR:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_5GB;
+		break;
+	case ICE_PHY_TYPE_LOW_10GBASE_T:
+	case ICE_PHY_TYPE_LOW_10G_SFI_DA:
+	case ICE_PHY_TYPE_LOW_10GBASE_SR:
+	case ICE_PHY_TYPE_LOW_10GBASE_LR:
+	case ICE_PHY_TYPE_LOW_10GBASE_KR_CR1:
+	case ICE_PHY_TYPE_LOW_10G_SFI_AOC_ACC:
+	case ICE_PHY_TYPE_LOW_10G_SFI_C2C:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_10GB;
+		break;
+	case ICE_PHY_TYPE_LOW_25GBASE_T:
+	case ICE_PHY_TYPE_LOW_25GBASE_CR:
+	case ICE_PHY_TYPE_LOW_25GBASE_CR_S:
+	case ICE_PHY_TYPE_LOW_25GBASE_CR1:
+	case ICE_PHY_TYPE_LOW_25GBASE_SR:
+	case ICE_PHY_TYPE_LOW_25GBASE_LR:
+	case ICE_PHY_TYPE_LOW_25GBASE_KR:
+	case ICE_PHY_TYPE_LOW_25GBASE_KR_S:
+	case ICE_PHY_TYPE_LOW_25GBASE_KR1:
+	case ICE_PHY_TYPE_LOW_25G_AUI_AOC_ACC:
+	case ICE_PHY_TYPE_LOW_25G_AUI_C2C:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_25GB;
+		break;
+	case ICE_PHY_TYPE_LOW_40GBASE_CR4:
+	case ICE_PHY_TYPE_LOW_40GBASE_SR4:
+	case ICE_PHY_TYPE_LOW_40GBASE_LR4:
+	case ICE_PHY_TYPE_LOW_40GBASE_KR4:
+	case ICE_PHY_TYPE_LOW_40G_XLAUI_AOC_ACC:
+	case ICE_PHY_TYPE_LOW_40G_XLAUI:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_40GB;
+		break;
+	default:
+		speed_phy_type_low = ICE_AQ_LINK_SPEED_UNKNOWN;
+		break;
+	}
+
+	return speed_phy_type_low;
+}
+
+/**
+ * ice_update_phy_type
+ * @phy_type_low: pointer to the lower part of phy_type
+ * @link_speeds_bitmap: targeted link speeds bitmap
+ *
+ * Note: For the link_speeds_bitmap structure, you can check it at
+ * [ice_aqc_get_link_status->link_speed]. Caller can pass in
+ * link_speeds_bitmap include multiple speeds.
+ *
+ * The value of phy_type_low will present a certain link speed. This helper
+ * function will turn on bits in the phy_type_low based on the value of
+ * link_speeds_bitmap input parameter.
+ */
+void ice_update_phy_type(u64 *phy_type_low, u16 link_speeds_bitmap)
+{
+	u16 speed = ICE_AQ_LINK_SPEED_UNKNOWN;
+	u64 pt_low;
+	int index;
+
+	/* We first check with low part of phy_type */
+	for (index = 0; index <= ICE_PHY_TYPE_LOW_MAX_INDEX; index++) {
+		pt_low = BIT_ULL(index);
+		speed = ice_get_link_speed_based_on_phy_type(pt_low);
+
+		if (link_speeds_bitmap & speed)
+			*phy_type_low |= BIT_ULL(index);
+	}
+}
+
+/**
  * ice_aq_set_phy_cfg
  * @hw: pointer to the hw struct
  * @lport: logical port number
@@ -1415,19 +1702,18 @@ void ice_clear_pxe_mode(struct ice_hw *hw)
  * mode as the PF may not have the privilege to set some of the PHY Config
  * parameters. This status will be indicated by the command response (0x0601).
  */
-static enum ice_status
+enum ice_status
 ice_aq_set_phy_cfg(struct ice_hw *hw, u8 lport,
 		   struct ice_aqc_set_phy_cfg_data *cfg, struct ice_sq_cd *cd)
 {
-	struct ice_aqc_set_phy_cfg *cmd;
 	struct ice_aq_desc desc;
 
 	if (!cfg)
 		return ICE_ERR_PARAM;
 
-	cmd = &desc.params.set_phy;
 	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_set_phy_cfg);
-	cmd->lport_num = lport;
+	desc.params.set_phy.lport_num = lport;
+	desc.flags |= cpu_to_le16(ICE_AQ_FLAG_RD);
 
 	return ice_aq_send_cmd(hw, &desc, cfg, sizeof(*cfg), cd);
 }
@@ -1476,12 +1762,12 @@ out:
  * ice_set_fc
  * @pi: port information structure
  * @aq_failures: pointer to status code, specific to ice_set_fc routine
- * @atomic_restart: enable automatic link update
+ * @ena_auto_link_update: enable automatic link update
  *
  * Set the requested flow control mode.
  */
 enum ice_status
-ice_set_fc(struct ice_port_info *pi, u8 *aq_failures, bool atomic_restart)
+ice_set_fc(struct ice_port_info *pi, u8 *aq_failures, bool ena_auto_link_update)
 {
 	struct ice_aqc_set_phy_cfg_data cfg = { 0 };
 	struct ice_aqc_get_phy_caps_data *pcaps;
@@ -1531,8 +1817,8 @@ ice_set_fc(struct ice_port_info *pi, u8 *aq_failures, bool atomic_restart)
 		int retry_count, retry_max = 10;
 
 		/* Auto restart link so settings take effect */
-		if (atomic_restart)
-			cfg.caps |= ICE_AQ_PHY_ENA_ATOMIC_LINK;
+		if (ena_auto_link_update)
+			cfg.caps |= ICE_AQ_PHY_ENA_AUTO_LINK_UPDT;
 		/* Copy over all the old settings */
 		cfg.phy_type_low = pcaps->phy_type_low;
 		cfg.low_power_ctrl = pcaps->low_power_ctrl;

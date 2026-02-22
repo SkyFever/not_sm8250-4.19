@@ -9008,7 +9008,7 @@ static void assert_can_disable_lcpll(struct drm_i915_private *dev_priv)
 		I915_STATE_WARN(crtc->active, "CRTC for pipe %c enabled\n",
 		     pipe_name(crtc->pipe));
 
-	I915_STATE_WARN(I915_READ(HSW_PWR_WELL_CTL_DRIVER(HSW_DISP_PW_GLOBAL)),
+	I915_STATE_WARN(I915_READ(HSW_PWR_WELL_CTL2),
 			"Display power well on\n");
 	I915_STATE_WARN(I915_READ(SPLL_CTL) & SPLL_PLL_ENABLE, "SPLL enabled\n");
 	I915_STATE_WARN(I915_READ(WRPLL_CTL(0)) & WRPLL_PLL_ENABLE, "WRPLL1 enabled\n");
@@ -12768,7 +12768,7 @@ static void intel_atomic_commit_tail(struct drm_atomic_state *state)
 	 * down.
 	 */
 	INIT_WORK(&state->commit_work, intel_atomic_cleanup_work);
-	schedule_work(&state->commit_work);
+	queue_work(system_highpri_wq, &state->commit_work);
 }
 
 static void intel_atomic_commit_work(struct work_struct *work)
@@ -14158,6 +14158,9 @@ static void intel_setup_outputs(struct drm_i915_private *dev_priv)
 
 	intel_pps_init(dev_priv);
 
+	if (INTEL_INFO(dev_priv)->num_pipes == 0)
+		return;
+
 	/*
 	 * intel_edp_init_connector() depends on this completing first, to
 	 * prevent the registeration of both eDP and LVDS and the incorrect
@@ -15158,12 +15161,61 @@ static void intel_update_fdi_pll_freq(struct drm_i915_private *dev_priv)
 	DRM_DEBUG_DRIVER("FDI PLL freq=%d\n", dev_priv->fdi_pll_freq);
 }
 
+static int intel_initial_commit(struct drm_device *dev)
+{
+	struct drm_atomic_state *state = NULL;
+	struct drm_modeset_acquire_ctx ctx;
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *crtc_state;
+	int ret = 0;
+
+	state = drm_atomic_state_alloc(dev);
+	if (!state)
+		return -ENOMEM;
+
+	drm_modeset_acquire_init(&ctx, 0);
+
+retry:
+	state->acquire_ctx = &ctx;
+
+	drm_for_each_crtc(crtc, dev) {
+		crtc_state = drm_atomic_get_crtc_state(state, crtc);
+		if (IS_ERR(crtc_state)) {
+			ret = PTR_ERR(crtc_state);
+			goto out;
+		}
+
+		if (crtc_state->active) {
+			ret = drm_atomic_add_affected_planes(state, crtc);
+			if (ret)
+				goto out;
+		}
+	}
+
+	ret = drm_atomic_commit(state);
+
+out:
+	if (ret == -EDEADLK) {
+		drm_atomic_state_clear(state);
+		drm_modeset_backoff(&ctx);
+		goto retry;
+	}
+
+	drm_atomic_state_put(state);
+
+	drm_modeset_drop_locks(&ctx);
+	drm_modeset_acquire_fini(&ctx);
+
+	return ret;
+}
+
 int intel_modeset_init(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = to_i915(dev);
 	struct i915_ggtt *ggtt = &dev_priv->ggtt;
 	enum pipe pipe;
 	struct intel_crtc *crtc;
+	int ret;
 
 	dev_priv->modeset_wq = alloc_ordered_workqueue("i915_modeset", 0);
 
@@ -15186,9 +15238,6 @@ int intel_modeset_init(struct drm_device *dev)
 	intel_init_quirks(dev);
 
 	intel_init_pm(dev_priv);
-
-	if (INTEL_INFO(dev_priv)->num_pipes == 0)
-		return 0;
 
 	/*
 	 * There may be no VBT; and if the BIOS enabled SSC we can
@@ -15238,8 +15287,6 @@ int intel_modeset_init(struct drm_device *dev)
 		      INTEL_INFO(dev_priv)->num_pipes > 1 ? "s" : "");
 
 	for_each_pipe(dev_priv, pipe) {
-		int ret;
-
 		ret = intel_crtc_init(dev_priv, pipe);
 		if (ret) {
 			drm_mode_config_cleanup(dev);
@@ -15294,6 +15341,16 @@ int intel_modeset_init(struct drm_device *dev)
 	 */
 	if (!HAS_GMCH_DISPLAY(dev_priv))
 		sanitize_watermarks(dev);
+
+	/*
+	 * Force all active planes to recompute their states. So that on
+	 * mode_setcrtc after probe, all the intel_plane_state variables
+	 * are already calculated and there is no assert_plane warnings
+	 * during bootup.
+	 */
+	ret = intel_initial_commit(dev);
+	if (ret)
+		DRM_DEBUG_KMS("Initial commit in probe failed.\n");
 
 	return 0;
 }
@@ -16106,8 +16163,7 @@ intel_display_capture_error_state(struct drm_i915_private *dev_priv)
 		return NULL;
 
 	if (IS_HASWELL(dev_priv) || IS_BROADWELL(dev_priv))
-		error->power_well_driver =
-			I915_READ(HSW_PWR_WELL_CTL_DRIVER(HSW_DISP_PW_GLOBAL));
+		error->power_well_driver = I915_READ(HSW_PWR_WELL_CTL2);
 
 	for_each_pipe(dev_priv, i) {
 		error->pipe[i].power_domain_on =

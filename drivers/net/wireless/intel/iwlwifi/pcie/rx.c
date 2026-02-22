@@ -17,9 +17,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program.
- *
  * The full GNU General Public License is included in this distribution in the
  * file called LICENSE.
  *
@@ -781,7 +778,7 @@ err:
 	return -ENOMEM;
 }
 
-static int iwl_pcie_rx_alloc(struct iwl_trans *trans)
+int iwl_pcie_rx_alloc(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_rb_allocator *rba = &trans_pcie->rba;
@@ -1007,7 +1004,7 @@ int iwl_pcie_dummy_napi_poll(struct napi_struct *napi, int budget)
 	return 0;
 }
 
-static int _iwl_pcie_rx_init(struct iwl_trans *trans)
+int _iwl_pcie_rx_init(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_rxq *def_rxq;
@@ -1112,6 +1109,9 @@ int iwl_pcie_rx_init(struct iwl_trans *trans)
 
 int iwl_pcie_gen2_rx_init(struct iwl_trans *trans)
 {
+	/* Set interrupt coalescing timer to default (2048 usecs) */
+	iwl_write8(trans, CSR_INT_COALESCING, IWL_HOST_INT_TIMEOUT_DEF);
+
 	/*
 	 * We don't configure the RFH.
 	 * Restock will be done at alive, after firmware configured the RFH.
@@ -1282,7 +1282,7 @@ static void iwl_pcie_rx_handle_rb(struct iwl_trans *trans,
 		index = SEQ_TO_INDEX(sequence);
 		cmd_index = iwl_pcie_get_cmd_index(txq, index);
 
-		if (rxq->id == 0)
+		if (rxq->id == trans_pcie->def_rx_queue)
 			iwl_op_mode_rx(trans->op_mode, &rxq->napi,
 				       &rxcb);
 		else

@@ -355,8 +355,8 @@ void mt76x0_mac_work(struct work_struct *work)
 		u32 span;
 		u64 *stat_base;
 	} spans[] = {
-		{ MT_RX_STA_CNT0,	3,	dev->stats.rx_stat },
-		{ MT_TX_STA_CNT0,	3,	dev->stats.tx_stat },
+		{ MT_RX_STAT_0,	3,	dev->stats.rx_stat },
+		{ MT_TX_STA_0,	3,	dev->stats.tx_stat },
 		{ MT_TX_AGG_STAT,	1,	dev->stats.aggr_stat },
 		{ MT_MPDU_DENSITY_CNT,	1,	dev->stats.zero_len_del },
 		{ MT_TX_AGG_CNT_BASE0,	8,	&dev->stats.aggr_n[0] },
@@ -397,23 +397,6 @@ void mt76x0_mac_work(struct work_struct *work)
 	mt76x0_check_mac_err(dev);
 
 	ieee80211_queue_delayed_work(dev->mt76.hw, &dev->mac_work, 10 * HZ);
-}
-
-void
-mt76x0_mac_wcid_setup(struct mt76x0_dev *dev, u8 idx, u8 vif_idx, u8 *mac)
-{
-	u8 zmac[ETH_ALEN] = {};
-	u32 attr;
-
-	attr = FIELD_PREP(MT_WCID_ATTR_BSS_IDX, vif_idx & 7) |
-	       FIELD_PREP(MT_WCID_ATTR_BSS_IDX_EXT, !!(vif_idx & 8));
-
-	mt76_wr(dev, MT_WCID_ATTR(idx), attr);
-
-	if (mac)
-		memcpy(zmac, mac, sizeof(zmac));
-
-	mt76x0_addr_wr(dev, MT_WCID_ADDR(idx), zmac);
 }
 
 void mt76x0_mac_set_ampdu_factor(struct mt76x0_dev *dev)
@@ -564,95 +547,4 @@ u32 mt76x0_mac_process_rx(struct mt76x0_dev *dev, struct sk_buff *skb,
 	spin_unlock_bh(&dev->con_mon_lock);
 
 	return len;
-}
-
-static enum mt76_cipher_type
-mt76_mac_get_key_info(struct ieee80211_key_conf *key, u8 *key_data)
-{
-	memset(key_data, 0, 32);
-	if (!key)
-		return MT_CIPHER_NONE;
-
-	if (key->keylen > 32)
-		return MT_CIPHER_NONE;
-
-	memcpy(key_data, key->key, key->keylen);
-
-	switch (key->cipher) {
-	case WLAN_CIPHER_SUITE_WEP40:
-		return MT_CIPHER_WEP40;
-	case WLAN_CIPHER_SUITE_WEP104:
-		return MT_CIPHER_WEP104;
-	case WLAN_CIPHER_SUITE_TKIP:
-		return MT_CIPHER_TKIP;
-	case WLAN_CIPHER_SUITE_CCMP:
-		return MT_CIPHER_AES_CCMP;
-	default:
-		return MT_CIPHER_NONE;
-	}
-}
-
-int mt76x0_mac_wcid_set_key(struct mt76x0_dev *dev, u8 idx,
-			  struct ieee80211_key_conf *key)
-{
-	enum mt76_cipher_type cipher;
-	u8 key_data[32];
-	u8 iv_data[8];
-	u32 val;
-
-	cipher = mt76_mac_get_key_info(key, key_data);
-	if (cipher == MT_CIPHER_NONE && key)
-		return -EINVAL;
-
-	trace_mt76x0_set_key(&dev->mt76, idx);
-
-	mt76_wr_copy(dev, MT_WCID_KEY(idx), key_data, sizeof(key_data));
-
-	memset(iv_data, 0, sizeof(iv_data));
-	if (key) {
-		iv_data[3] = key->keyidx << 6;
-		if (cipher >= MT_CIPHER_TKIP) {
-			/* Note: start with 1 to comply with spec,
-			 *	 (see comment on common/cmm_wpa.c:4291).
-			 */
-			iv_data[0] |= 1;
-			iv_data[3] |= 0x20;
-		}
-	}
-	mt76_wr_copy(dev, MT_WCID_IV(idx), iv_data, sizeof(iv_data));
-
-	val = mt76_rr(dev, MT_WCID_ATTR(idx));
-	val &= ~MT_WCID_ATTR_PKEY_MODE & ~MT_WCID_ATTR_PKEY_MODE_EXT;
-	val |= FIELD_PREP(MT_WCID_ATTR_PKEY_MODE, cipher & 7) |
-	       FIELD_PREP(MT_WCID_ATTR_PKEY_MODE_EXT, cipher >> 3);
-	val &= ~MT_WCID_ATTR_PAIRWISE;
-	val |= MT_WCID_ATTR_PAIRWISE *
-		!!(key && key->flags & IEEE80211_KEY_FLAG_PAIRWISE);
-	mt76_wr(dev, MT_WCID_ATTR(idx), val);
-
-	return 0;
-}
-
-int mt76x0_mac_shared_key_setup(struct mt76x0_dev *dev, u8 vif_idx, u8 key_idx,
-			      struct ieee80211_key_conf *key)
-{
-	enum mt76_cipher_type cipher;
-	u8 key_data[32];
-	u32 val;
-
-	cipher = mt76_mac_get_key_info(key, key_data);
-	if (cipher == MT_CIPHER_NONE && key)
-		return -EINVAL;
-
-	trace_mt76x0_set_shared_key(&dev->mt76, vif_idx, key_idx);
-
-	mt76_wr_copy(dev, MT_SKEY(vif_idx, key_idx),
-			key_data, sizeof(key_data));
-
-	val = mt76_rr(dev, MT_SKEY_MODE(vif_idx));
-	val &= ~(MT_SKEY_MODE_MASK << MT_SKEY_MODE_SHIFT(vif_idx, key_idx));
-	val |= cipher << MT_SKEY_MODE_SHIFT(vif_idx, key_idx);
-	mt76_wr(dev, MT_SKEY_MODE(vif_idx), val);
-
-	return 0;
 }

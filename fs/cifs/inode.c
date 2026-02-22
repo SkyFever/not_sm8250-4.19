@@ -162,7 +162,11 @@ cifs_fattr_to_inode(struct inode *inode, struct cifs_fattr *fattr)
 	cifs_revalidate_cache(inode, fattr);
 
 	spin_lock(&inode->i_lock);
-	inode->i_atime = fattr->cf_atime;
+	/* we do not want atime to be less than mtime, it broke some apps */
+	if (timespec64_compare(&fattr->cf_atime, &fattr->cf_mtime))
+		inode->i_atime = fattr->cf_mtime;
+	else
+		inode->i_atime = fattr->cf_atime;
 	inode->i_mtime = fattr->cf_mtime;
 	inode->i_ctime = fattr->cf_ctime;
 	inode->i_rdev = fattr->cf_rdev;
@@ -1319,8 +1323,8 @@ cifs_drop_nlink(struct inode *inode)
 /*
  * If d_inode(dentry) is null (usually meaning the cached dentry
  * is a negative dentry) then we would attempt a standard SMB delete, but
- * if that fails we can not attempt the fall back mechanisms on EACCESS
- * but will return the EACCESS to the caller. Note that the VFS does not call
+ * if that fails we can not attempt the fall back mechanisms on EACCES
+ * but will return the EACCES to the caller. Note that the VFS does not call
  * unlink on negative dentries currently.
  */
 int cifs_unlink(struct inode *dir, struct dentry *dentry)

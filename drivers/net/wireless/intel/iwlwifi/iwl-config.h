@@ -18,11 +18,6 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110,
- * USA
- *
  * The full GNU General Public License is included in this distribution
  * in the file called COPYING.
  *
@@ -388,6 +383,8 @@ struct iwl_csr_params {
  * @gen2: 22000 and on transport operation
  * @cdb: CDB support
  * @nvm_type: see &enum iwl_nvm_type
+ * @d3_debug_data_base_addr: base address where D3 debug data is stored
+ * @d3_debug_data_length: length of the D3 debug data
  *
  * We enable the driver to be backward compatible wrt. hardware features.
  * API differences in uCode shouldn't be handled here but through TLVs
@@ -452,6 +449,8 @@ struct iwl_cfg {
 	u8 ucode_api_min;
 	u32 min_umac_error_event_table;
 	u32 extra_phy_cfg_flags;
+	u32 d3_debug_data_base_addr;
+	u32 d3_debug_data_length;
 };
 
 static const struct iwl_csr_params iwl_csr_v1 = {

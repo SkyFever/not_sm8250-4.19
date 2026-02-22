@@ -825,7 +825,7 @@ static void ceph_aio_complete_req(struct ceph_osd_request *req)
 				aio_req->total_len = rc + zlen;
 			}
 
-			iov_iter_bvec(&i, ITER_BVEC, osd_data->bvec_pos.bvecs,
+			iov_iter_bvec(&i, READ, osd_data->bvec_pos.bvecs,
 				      osd_data->num_bvecs,
 				      osd_data->bvec_pos.iter.bi_size);
 			iov_iter_advance(&i, rc);
@@ -869,7 +869,7 @@ static void ceph_aio_retry_work(struct work_struct *work)
 	}
 	spin_unlock(&ci->i_ceph_lock);
 
-	req = ceph_osdc_alloc_request(orig_req->r_osdc, snapc, 2,
+	req = ceph_osdc_alloc_request(orig_req->r_osdc, snapc, 1,
 			false, GFP_NOFS);
 	if (!req) {
 		ret = -ENOMEM;
@@ -881,17 +881,17 @@ static void ceph_aio_retry_work(struct work_struct *work)
 	ceph_oloc_copy(&req->r_base_oloc, &orig_req->r_base_oloc);
 	ceph_oid_copy(&req->r_base_oid, &orig_req->r_base_oid);
 
+	req->r_ops[0] = orig_req->r_ops[0];
+
+	req->r_mtime = aio_req->mtime;
+	req->r_data_offset = req->r_ops[0].extent.offset;
+
 	ret = ceph_osdc_alloc_messages(req, GFP_NOFS);
 	if (ret) {
 		ceph_osdc_put_request(req);
 		req = orig_req;
 		goto out;
 	}
-
-	req->r_ops[0] = orig_req->r_ops[0];
-
-	req->r_mtime = aio_req->mtime;
-	req->r_data_offset = req->r_ops[0].extent.offset;
 
 	ceph_osdc_put_request(orig_req);
 
@@ -1048,8 +1048,7 @@ ceph_direct_read_write(struct kiocb *iocb, struct iov_iter *iter,
 				int zlen = min_t(size_t, len - ret,
 						 size - pos - ret);
 
-				iov_iter_bvec(&i, ITER_BVEC, bvecs, num_pages,
-					      len);
+				iov_iter_bvec(&i, READ, bvecs, num_pages, len);
 				iov_iter_advance(&i, ret);
 				iov_iter_zero(zlen, &i);
 				ret += zlen;

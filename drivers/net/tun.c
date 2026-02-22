@@ -132,7 +132,6 @@ do {								\
 } while (0)
 #endif
 
-#define TUN_HEADROOM 256
 #define TUN_RX_PAD (NET_IP_ALIGN + NET_SKB_PAD)
 
 /* TUN device flags */
@@ -1713,7 +1712,7 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 	rcu_read_lock();
 	xdp_prog = rcu_dereference(tun->xdp_prog);
 	if (xdp_prog)
-		pad += TUN_HEADROOM;
+		pad += XDP_PACKET_HEADROOM;
 	buflen += SKB_DATA_ALIGN(len + pad);
 	rcu_read_unlock();
 
@@ -1786,22 +1785,18 @@ static struct sk_buff *tun_build_skb(struct tun_struct *tun,
 			goto err_xdp;
 		}
 	}
+	rcu_read_unlock();
+	local_bh_enable();
 
 	skb = build_skb(buf, buflen);
-	if (!skb) {
-		rcu_read_unlock();
-		local_bh_enable();
+	if (!skb)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	skb_reserve(skb, pad - delta);
 	skb_put(skb, len);
 	skb_set_owner_w(skb, tfile->socket.sk);
 	get_page(alloc_frag->page);
 	alloc_frag->offset += buflen;
-
-	rcu_read_unlock();
-	local_bh_enable();
 
 	return skb;
 
@@ -2581,11 +2576,15 @@ static int tun_sendmsg(struct socket *sock, struct msghdr *m, size_t total_len)
 	int ret;
 	struct tun_file *tfile = container_of(sock, struct tun_file, socket);
 	struct tun_struct *tun = tun_get(tfile);
+	struct tun_msg_ctl *ctl = m->msg_control;
 
 	if (!tun)
 		return -EBADFD;
 
-	ret = tun_get_user(tun, tfile, m->msg_control, &m->msg_iter,
+	if (ctl && ctl->type != TUN_MSG_UBUF)
+		return -EINVAL;
+
+	ret = tun_get_user(tun, tfile, ctl ? ctl->ptr : NULL, &m->msg_iter,
 			   m->msg_flags & MSG_DONTWAIT,
 			   m->msg_flags & MSG_MORE);
 	tun_put(tun);

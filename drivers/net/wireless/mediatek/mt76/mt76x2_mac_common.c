@@ -229,84 +229,6 @@ out:
 }
 EXPORT_SYMBOL_GPL(mt76x2_send_tx_status);
 
-static enum mt76x2_cipher_type
-mt76x2_mac_get_key_info(struct ieee80211_key_conf *key, u8 *key_data)
-{
-	memset(key_data, 0, 32);
-	if (!key)
-		return MT_CIPHER_NONE;
-
-	if (key->keylen > 32)
-		return MT_CIPHER_NONE;
-
-	memcpy(key_data, key->key, key->keylen);
-
-	switch (key->cipher) {
-	case WLAN_CIPHER_SUITE_WEP40:
-		return MT_CIPHER_WEP40;
-	case WLAN_CIPHER_SUITE_WEP104:
-		return MT_CIPHER_WEP104;
-	case WLAN_CIPHER_SUITE_TKIP:
-		return MT_CIPHER_TKIP;
-	case WLAN_CIPHER_SUITE_CCMP:
-		return MT_CIPHER_AES_CCMP;
-	default:
-		return MT_CIPHER_NONE;
-	}
-}
-
-int mt76x2_mac_shared_key_setup(struct mt76x2_dev *dev, u8 vif_idx, u8 key_idx,
-				struct ieee80211_key_conf *key)
-{
-	enum mt76x2_cipher_type cipher;
-	u8 key_data[32];
-	u32 val;
-
-	cipher = mt76x2_mac_get_key_info(key, key_data);
-	if (cipher == MT_CIPHER_NONE && key)
-		return -EOPNOTSUPP;
-
-	val = mt76_rr(dev, MT_SKEY_MODE(vif_idx));
-	val &= ~(MT_SKEY_MODE_MASK << MT_SKEY_MODE_SHIFT(vif_idx, key_idx));
-	val |= cipher << MT_SKEY_MODE_SHIFT(vif_idx, key_idx);
-	mt76_wr(dev, MT_SKEY_MODE(vif_idx), val);
-
-	mt76_wr_copy(dev, MT_SKEY(vif_idx, key_idx), key_data,
-		     sizeof(key_data));
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(mt76x2_mac_shared_key_setup);
-
-int mt76x2_mac_wcid_set_key(struct mt76x2_dev *dev, u8 idx,
-			    struct ieee80211_key_conf *key)
-{
-	enum mt76x2_cipher_type cipher;
-	u8 key_data[32];
-	u8 iv_data[8];
-
-	cipher = mt76x2_mac_get_key_info(key, key_data);
-	if (cipher == MT_CIPHER_NONE && key)
-		return -EOPNOTSUPP;
-
-	mt76_rmw_field(dev, MT_WCID_ATTR(idx), MT_WCID_ATTR_PKEY_MODE, cipher);
-	mt76_wr_copy(dev, MT_WCID_KEY(idx), key_data, sizeof(key_data));
-
-	memset(iv_data, 0, sizeof(iv_data));
-	if (key) {
-		mt76_rmw_field(dev, MT_WCID_ATTR(idx), MT_WCID_ATTR_PAIRWISE,
-			       !!(key->flags & IEEE80211_KEY_FLAG_PAIRWISE));
-		iv_data[3] = key->keyidx << 6;
-		if (cipher >= MT_CIPHER_TKIP)
-			iv_data[3] |= 0x20;
-	}
-
-	mt76_wr_copy(dev, MT_WCID_IV(idx), iv_data, sizeof(iv_data));
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(mt76x2_mac_wcid_set_key);
-
 static __le16
 mt76x2_mac_tx_rate_val(struct mt76x2_dev *dev,
 		       const struct ieee80211_tx_rate *rate, u8 *nss_val)
@@ -460,40 +382,6 @@ void mt76x2_mac_write_txwi(struct mt76x2_dev *dev, struct mt76x2_txwi *txwi,
 	txwi->len_ctl = cpu_to_le16(len);
 }
 EXPORT_SYMBOL_GPL(mt76x2_mac_write_txwi);
-
-void mt76x2_mac_wcid_set_drop(struct mt76x2_dev *dev, u8 idx, bool drop)
-{
-	u32 val = mt76_rr(dev, MT_WCID_DROP(idx));
-	u32 bit = MT_WCID_DROP_MASK(idx);
-
-	/* prevent unnecessary writes */
-	if ((val & bit) != (bit * drop))
-		mt76_wr(dev, MT_WCID_DROP(idx), (val & ~bit) | (bit * drop));
-}
-EXPORT_SYMBOL_GPL(mt76x2_mac_wcid_set_drop);
-
-void mt76x2_mac_wcid_setup(struct mt76x2_dev *dev, u8 idx, u8 vif_idx, u8 *mac)
-{
-	struct mt76_wcid_addr addr = {};
-	u32 attr;
-
-	attr = FIELD_PREP(MT_WCID_ATTR_BSS_IDX, vif_idx & 7) |
-	       FIELD_PREP(MT_WCID_ATTR_BSS_IDX_EXT, !!(vif_idx & 8));
-
-	mt76_wr(dev, MT_WCID_ATTR(idx), attr);
-
-	mt76_wr(dev, MT_WCID_TX_RATE(idx), 0);
-	mt76_wr(dev, MT_WCID_TX_RATE(idx) + 4, 0);
-
-	if (idx >= 128)
-		return;
-
-	if (mac)
-		memcpy(addr.macaddr, mac, ETH_ALEN);
-
-	mt76_wr_copy(dev, MT_WCID_ADDR(idx), &addr, sizeof(addr));
-}
-EXPORT_SYMBOL_GPL(mt76x2_mac_wcid_setup);
 
 static int
 mt76x2_mac_process_rate(struct mt76_rx_status *status, u16 rate)

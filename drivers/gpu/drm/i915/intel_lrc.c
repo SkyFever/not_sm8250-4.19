@@ -1323,7 +1323,7 @@ static int __context_pin(struct i915_gem_context *ctx, struct i915_vma *vma)
 	if (ctx->ggtt_offset_bias)
 		flags |= PIN_OFFSET_BIAS | ctx->ggtt_offset_bias;
 
-	return i915_vma_pin(vma, 0, GEN8_LR_CONTEXT_ALIGN, flags);
+	return i915_vma_pin(vma, 0, 0, flags);
 }
 
 static struct intel_context *
@@ -1669,7 +1669,7 @@ static int lrc_setup_wa_ctx(struct intel_engine_cs *engine)
 		goto err;
 	}
 
-	err = i915_vma_pin(vma, 0, PAGE_SIZE, PIN_GLOBAL | PIN_HIGH);
+	err = i915_vma_pin(vma, 0, 0, PIN_GLOBAL | PIN_HIGH);
 	if (err)
 		goto err;
 
@@ -1683,7 +1683,7 @@ err:
 
 static void lrc_destroy_wa_ctx(struct intel_engine_cs *engine)
 {
-	i915_vma_unpin_and_release(&engine->wa_ctx.vma);
+	i915_vma_unpin_and_release(&engine->wa_ctx.vma, 0);
 }
 
 typedef u32 *(*wa_bb_func_t)(struct intel_engine_cs *engine, u32 *batch);
@@ -1801,11 +1801,7 @@ static bool unexpected_starting_state(struct intel_engine_cs *engine)
 
 static int gen8_init_common_ring(struct intel_engine_cs *engine)
 {
-	int ret;
-
-	ret = intel_mocs_init_engine(engine);
-	if (ret)
-		return ret;
+	intel_mocs_init_engine(engine);
 
 	intel_engine_reset_breadcrumbs(engine);
 
@@ -2680,6 +2676,10 @@ static void execlists_init_reg_state(u32 *regs,
 
 		i915_oa_init_reg_state(engine, ctx, regs);
 	}
+
+	regs[CTX_END] = MI_BATCH_BUFFER_END;
+	if (INTEL_GEN(dev_priv) >= 10)
+		regs[CTX_END] |= BIT(0);
 }
 
 static int

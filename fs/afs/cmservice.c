@@ -195,13 +195,13 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 
 	switch (call->unmarshall) {
 	case 0:
-		call->offset = 0;
+		afs_extract_to_tmp(call);
 		call->unmarshall++;
 
 		/* extract the FID array and its count in two steps */
 	case 1:
 		_debug("extract FID count");
-		ret = afs_extract_data(call, &call->tmp, 4, true);
+		ret = afs_extract_data(call, true);
 		if (ret < 0)
 			return ret;
 
@@ -215,13 +215,12 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 				       GFP_KERNEL);
 		if (!call->buffer)
 			return -ENOMEM;
-		call->offset = 0;
+		afs_extract_to_buf(call, call->count * 3 * 4);
 		call->unmarshall++;
 
 	case 2:
 		_debug("extract FID array");
-		ret = afs_extract_data(call, call->buffer,
-				       call->count * 3 * 4, true);
+		ret = afs_extract_data(call, true);
 		if (ret < 0)
 			return ret;
 
@@ -238,16 +237,15 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 			cb->fid.vid	= ntohl(*bp++);
 			cb->fid.vnode	= ntohl(*bp++);
 			cb->fid.unique	= ntohl(*bp++);
-			cb->cb.type	= AFSCM_CB_UNTYPED;
 		}
 
-		call->offset = 0;
+		afs_extract_to_tmp(call);
 		call->unmarshall++;
 
 		/* extract the callback array and its count in two steps */
 	case 3:
 		_debug("extract CB count");
-		ret = afs_extract_data(call, &call->tmp, 4, true);
+		ret = afs_extract_data(call, true);
 		if (ret < 0)
 			return ret;
 
@@ -256,26 +254,18 @@ static int afs_deliver_cb_callback(struct afs_call *call)
 		if (call->count2 != call->count && call->count2 != 0)
 			return afs_protocol_error(call, -EBADMSG,
 						  afs_eproto_cb_count);
-		call->offset = 0;
+		call->_iter = &call->iter;
+		iov_iter_discard(&call->iter, READ, call->count2 * 3 * 4);
 		call->unmarshall++;
 
 	case 4:
-		_debug("extract CB array");
-		ret = afs_extract_data(call, call->buffer,
-				       call->count2 * 3 * 4, false);
+		_debug("extract discard %zu/%u",
+		       iov_iter_count(&call->iter), call->count2 * 3 * 4);
+
+		ret = afs_extract_data(call, false);
 		if (ret < 0)
 			return ret;
 
-		_debug("unmarshall CB array");
-		cb = call->request;
-		bp = call->buffer;
-		for (loop = call->count2; loop > 0; loop--, cb++) {
-			cb->cb.version	= ntohl(*bp++);
-			cb->cb.expiry	= ntohl(*bp++);
-			cb->cb.type	= ntohl(*bp++);
-		}
-
-		call->offset = 0;
 		call->unmarshall++;
 	case 5:
 		break;
@@ -322,7 +312,8 @@ static int afs_deliver_cb_init_call_back_state(struct afs_call *call)
 
 	rxrpc_kernel_get_peer(call->net->socket, call->rxcall, &srx);
 
-	ret = afs_extract_data(call, NULL, 0, false);
+	afs_extract_discard(call, 0);
+	ret = afs_extract_data(call, false);
 	if (ret < 0)
 		return ret;
 
@@ -351,16 +342,15 @@ static int afs_deliver_cb_init_call_back_state3(struct afs_call *call)
 
 	switch (call->unmarshall) {
 	case 0:
-		call->offset = 0;
 		call->buffer = kmalloc_array(11, sizeof(__be32), GFP_KERNEL);
 		if (!call->buffer)
 			return -ENOMEM;
+		afs_extract_to_buf(call, 11 * sizeof(__be32));
 		call->unmarshall++;
 
 	case 1:
 		_debug("extract UUID");
-		ret = afs_extract_data(call, call->buffer,
-				       11 * sizeof(__be32), false);
+		ret = afs_extract_data(call, false);
 		switch (ret) {
 		case 0:		break;
 		case -EAGAIN:	return 0;
@@ -383,7 +373,6 @@ static int afs_deliver_cb_init_call_back_state3(struct afs_call *call)
 		for (loop = 0; loop < 6; loop++)
 			r->node[loop] = ntohl(b[loop + 5]);
 
-		call->offset = 0;
 		call->unmarshall++;
 
 	case 2:
@@ -426,7 +415,8 @@ static int afs_deliver_cb_probe(struct afs_call *call)
 
 	_enter("");
 
-	ret = afs_extract_data(call, NULL, 0, false);
+	afs_extract_discard(call, 0);
+	ret = afs_extract_data(call, false);
 	if (ret < 0)
 		return ret;
 
@@ -470,16 +460,15 @@ static int afs_deliver_cb_probe_uuid(struct afs_call *call)
 
 	switch (call->unmarshall) {
 	case 0:
-		call->offset = 0;
 		call->buffer = kmalloc_array(11, sizeof(__be32), GFP_KERNEL);
 		if (!call->buffer)
 			return -ENOMEM;
+		afs_extract_to_buf(call, 11 * sizeof(__be32));
 		call->unmarshall++;
 
 	case 1:
 		_debug("extract UUID");
-		ret = afs_extract_data(call, call->buffer,
-				       11 * sizeof(__be32), false);
+		ret = afs_extract_data(call, false);
 		switch (ret) {
 		case 0:		break;
 		case -EAGAIN:	return 0;
@@ -502,7 +491,6 @@ static int afs_deliver_cb_probe_uuid(struct afs_call *call)
 		for (loop = 0; loop < 6; loop++)
 			r->node[loop] = ntohl(b[loop + 5]);
 
-		call->offset = 0;
 		call->unmarshall++;
 
 	case 2:
@@ -587,7 +575,8 @@ static int afs_deliver_cb_tell_me_about_yourself(struct afs_call *call)
 
 	_enter("");
 
-	ret = afs_extract_data(call, NULL, 0, false);
+	afs_extract_discard(call, 0);
+	ret = afs_extract_data(call, false);
 	if (ret < 0)
 		return ret;
 

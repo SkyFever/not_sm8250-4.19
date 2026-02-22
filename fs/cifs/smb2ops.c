@@ -74,6 +74,12 @@ smb2_add_credits(struct TCP_Server_Info *server, const unsigned int add,
 
 	spin_lock(&server->req_lock);
 	val = server->ops->get_credits_field(server, optype);
+
+	/* eg found case where write overlapping reconnect messed up credits */
+	if (((optype & CIFS_OP_MASK) == CIFS_NEG_OP) && (*val != 0))
+		trace_smb3_reconnect_with_invalid_credits(server->CurrentMid,
+			server->hostname, *val);
+
 	*val += add;
 	if (*val > 65000) {
 		*val = 65000; /* Don't get near 64K credits, avoid srv bugs */
@@ -123,7 +129,12 @@ smb2_set_credits(struct TCP_Server_Info *server, const int val)
 {
 	spin_lock(&server->req_lock);
 	server->credits = val;
+	if (val == 1)
+		server->reconnect_instance++;
 	spin_unlock(&server->req_lock);
+	/* don't log while holding the lock */
+	if (val == 1)
+		cifs_dbg(FYI, "set credits to 1 due to smb2 reconnect\n");
 }
 
 static int *
@@ -298,6 +309,31 @@ smb2_negotiate_wsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
 }
 
 static unsigned int
+smb3_negotiate_wsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
+{
+	struct TCP_Server_Info *server = tcon->ses->server;
+	unsigned int wsize;
+
+	/* start with specified wsize, or default */
+	wsize = volume_info->wsize ? volume_info->wsize : SMB3_DEFAULT_IOSIZE;
+	wsize = min_t(unsigned int, wsize, server->max_write);
+#ifdef CONFIG_CIFS_SMB_DIRECT
+	if (server->rdma) {
+		if (server->sign)
+			wsize = min_t(unsigned int,
+				wsize, server->smbd_conn->max_fragmented_send_size);
+		else
+			wsize = min_t(unsigned int,
+				wsize, server->smbd_conn->max_readwrite_size);
+	}
+#endif
+	if (!(server->capabilities & SMB2_GLOBAL_CAP_LARGE_MTU))
+		wsize = min_t(unsigned int, wsize, SMB2_MAX_BUFFER_SIZE);
+
+	return wsize;
+}
+
+static unsigned int
 smb2_negotiate_rsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
 {
 	struct TCP_Server_Info *server = tcon->ses->server;
@@ -323,6 +359,31 @@ smb2_negotiate_rsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
 	return rsize;
 }
 
+static unsigned int
+smb3_negotiate_rsize(struct cifs_tcon *tcon, struct smb_vol *volume_info)
+{
+	struct TCP_Server_Info *server = tcon->ses->server;
+	unsigned int rsize;
+
+	/* start with specified rsize, or default */
+	rsize = volume_info->rsize ? volume_info->rsize : SMB3_DEFAULT_IOSIZE;
+	rsize = min_t(unsigned int, rsize, server->max_read);
+#ifdef CONFIG_CIFS_SMB_DIRECT
+	if (server->rdma) {
+		if (server->sign)
+			rsize = min_t(unsigned int,
+				rsize, server->smbd_conn->max_fragmented_recv_size);
+		else
+			rsize = min_t(unsigned int,
+				rsize, server->smbd_conn->max_readwrite_size);
+	}
+#endif
+
+	if (!(server->capabilities & SMB2_GLOBAL_CAP_LARGE_MTU))
+		rsize = min_t(unsigned int, rsize, SMB2_MAX_BUFFER_SIZE);
+
+	return rsize;
+}
 
 static int
 parse_server_interfaces(struct network_interface_info_ioctl_rsp *buf,
@@ -1386,7 +1447,7 @@ smb2_set_file_size(const unsigned int xid, struct cifs_tcon *tcon,
 	}
 
 	return SMB2_set_eof(xid, tcon, cfile->fid.persistent_fid,
-			    cfile->fid.volatile_fid, cfile->pid, &eof, false);
+			    cfile->fid.volatile_fid, cfile->pid, &eof);
 }
 
 static int
@@ -1641,7 +1702,7 @@ smb2_oplock_response(struct cifs_tcon *tcon, struct cifs_fid *fid,
 				 CIFS_CACHE_READ(cinode) ? 1 : 0);
 }
 
-static void
+void
 smb2_set_related(struct smb_rqst *rqst)
 {
 	struct smb2_sync_hdr *shdr;
@@ -1652,7 +1713,7 @@ smb2_set_related(struct smb_rqst *rqst)
 
 char smb2_padding[7] = {0, 0, 0, 0, 0, 0, 0};
 
-static void
+void
 smb2_set_next_command(struct TCP_Server_Info *server, struct smb_rqst *rqst)
 {
 	struct smb2_sync_hdr *shdr;
@@ -1695,7 +1756,7 @@ smb2_queryfs(const unsigned int xid, struct cifs_tcon *tcon,
 		flags |= CIFS_TRANSFORM_REQ;
 
 	memset(rqst, 0, sizeof(rqst));
-	memset(resp_buftype, 0, sizeof(resp_buftype));
+	resp_buftype[0] = resp_buftype[1] = resp_buftype[2] = CIFS_NO_BUFFER;
 	memset(rsp_iov, 0, sizeof(rsp_iov));
 
 	memset(&open_iov, 0, sizeof(open_iov));
@@ -3113,13 +3174,13 @@ handle_read_data(struct TCP_Server_Info *server, struct mid_q_entry *mid,
 			return 0;
 		}
 
-		iov_iter_bvec(&iter, WRITE | ITER_BVEC, bvec, npages, data_len);
+		iov_iter_bvec(&iter, WRITE, bvec, npages, data_len);
 	} else if (buf_len >= data_offset + data_len) {
 		/* read response payload is in buf */
 		WARN_ONCE(npages > 0, "read data can be either in buf or in pages");
 		iov.iov_base = buf + data_offset;
 		iov.iov_len = data_len;
-		iov_iter_kvec(&iter, WRITE | ITER_KVEC, &iov, 1, data_len);
+		iov_iter_kvec(&iter, WRITE, &iov, 1, data_len);
 	} else {
 		/* read response payload cannot be in both buf and pages */
 		WARN_ONCE(1, "buf can not contain only a part of read data");
@@ -3578,8 +3639,8 @@ struct smb_version_operations smb30_operations = {
 	.downgrade_oplock = smb3_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
-	.negotiate_wsize = smb2_negotiate_wsize,
-	.negotiate_rsize = smb2_negotiate_rsize,
+	.negotiate_wsize = smb3_negotiate_wsize,
+	.negotiate_rsize = smb3_negotiate_rsize,
 	.sess_setup = SMB2_sess_setup,
 	.logoff = SMB2_logoff,
 	.tree_connect = SMB2_tcon,
@@ -3683,8 +3744,8 @@ struct smb_version_operations smb311_operations = {
 	.downgrade_oplock = smb3_downgrade_oplock,
 	.need_neg = smb2_need_neg,
 	.negotiate = smb2_negotiate,
-	.negotiate_wsize = smb2_negotiate_wsize,
-	.negotiate_rsize = smb2_negotiate_rsize,
+	.negotiate_wsize = smb3_negotiate_wsize,
+	.negotiate_rsize = smb3_negotiate_rsize,
 	.sess_setup = SMB2_sess_setup,
 	.logoff = SMB2_logoff,
 	.tree_connect = SMB2_tcon,

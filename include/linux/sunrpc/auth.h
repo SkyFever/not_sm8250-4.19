@@ -67,7 +67,7 @@ struct rpc_cred {
 	const struct rpc_credops *cr_ops;
 	unsigned long		cr_expire;	/* when to gc */
 	unsigned long		cr_flags;	/* various flags */
-	atomic_t		cr_count;	/* ref count */
+	refcount_t		cr_count;	/* ref count */
 
 	kuid_t			cr_uid;
 
@@ -100,7 +100,7 @@ struct rpc_auth {
 						 * differ from the flavor in
 						 * au_ops->au_flavor in gss
 						 * case) */
-	atomic_t		au_count;	/* Reference counter */
+	refcount_t		au_count;	/* Reference counter */
 
 	struct rpc_cred_cache *	au_credcache;
 	/* per-flavor data */
@@ -204,11 +204,11 @@ bool			rpcauth_cred_key_to_expire(struct rpc_auth *, struct rpc_cred *);
 char *			rpcauth_stringify_acceptor(struct rpc_cred *);
 
 static inline
-struct rpc_cred *	get_rpccred(struct rpc_cred *cred)
+struct rpc_cred *get_rpccred(struct rpc_cred *cred)
 {
-	if (cred != NULL)
-		atomic_inc(&cred->cr_count);
-	return cred;
+	if (cred != NULL && refcount_inc_not_zero(&cred->cr_count))
+		return cred;
+	return NULL;
 }
 
 /**
@@ -224,9 +224,7 @@ struct rpc_cred *	get_rpccred(struct rpc_cred *cred)
 static inline struct rpc_cred *
 get_rpccred_rcu(struct rpc_cred *cred)
 {
-	if (atomic_inc_not_zero(&cred->cr_count))
-		return cred;
-	return NULL;
+	return get_rpccred(cred);
 }
 
 #endif /* __KERNEL__ */

@@ -158,6 +158,7 @@ static struct afs_call *afs_alloc_call(struct afs_net *net,
 	INIT_WORK(&call->async_work, afs_process_async_call);
 	init_waitqueue_head(&call->waitq);
 	spin_lock_init(&call->state_lock);
+	call->_iter = &call->iter;
 
 	o = atomic_inc_return(&net->nr_outstanding_calls);
 	trace_afs_call(call, afs_call_trace_alloc, 1, o,
@@ -248,6 +249,7 @@ struct afs_call *afs_alloc_flat_call(struct afs_net *net,
 			goto nomem_free;
 	}
 
+	afs_extract_to_buf(call, call->reply_max);
 	call->operation_ID = type->op;
 	init_waitqueue_head(&call->waitq);
 	return call;
@@ -301,7 +303,7 @@ static void afs_load_bvec(struct afs_call *call, struct msghdr *msg,
 		offset = 0;
 	}
 
-	iov_iter_bvec(&msg->msg_iter, WRITE | ITER_BVEC, bv, nr, bytes);
+	iov_iter_bvec(&msg->msg_iter, WRITE, bv, nr, bytes);
 }
 
 /*
@@ -357,7 +359,7 @@ static int afs_send_pages(struct afs_call *call, struct msghdr *msg)
 long afs_make_call(struct afs_addr_cursor *ac, struct afs_call *call,
 		   gfp_t gfp, bool async)
 {
-	struct sockaddr_rxrpc *srx = ac->addr;
+	struct sockaddr_rxrpc *srx = &ac->alist->addrs[ac->index];
 	struct rxrpc_call *rxcall;
 	struct msghdr msg;
 	struct kvec iov[1];
@@ -416,8 +418,7 @@ long afs_make_call(struct afs_addr_cursor *ac, struct afs_call *call,
 
 	msg.msg_name		= NULL;
 	msg.msg_namelen		= 0;
-	iov_iter_kvec(&msg.msg_iter, WRITE | ITER_KVEC, iov, 1,
-		      call->request_size);
+	iov_iter_kvec(&msg.msg_iter, WRITE, iov, 1, call->request_size);
 	msg.msg_control		= NULL;
 	msg.msg_controllen	= 0;
 	msg.msg_flags		= MSG_WAITALL | (call->send_pages ? MSG_MORE : 0);
@@ -447,7 +448,7 @@ error_do_abort:
 		rxrpc_kernel_abort_call(call->net->socket, rxcall,
 					RX_USER_ABORT, ret, "KSD");
 	} else {
-		iov_iter_kvec(&msg.msg_iter, READ | ITER_KVEC, NULL, 0, 0);
+		iov_iter_kvec(&msg.msg_iter, READ, NULL, 0, 0);
 		rxrpc_kernel_recv_data(call->net->socket, rxcall,
 				       &msg.msg_iter, false,
 				       &call->abort_code, &call->service_id);
@@ -481,14 +482,12 @@ static void afs_deliver_to_call(struct afs_call *call)
 	       state == AFS_CALL_SV_AWAIT_ACK
 	       ) {
 		if (state == AFS_CALL_SV_AWAIT_ACK) {
-			struct iov_iter iter;
-
-			iov_iter_kvec(&iter, READ | ITER_KVEC, NULL, 0, 0);
+			iov_iter_kvec(&call->iter, READ, NULL, 0, 0);
 			ret = rxrpc_kernel_recv_data(call->net->socket,
-						     call->rxcall, &iter, false,
-						     &remote_abort,
+						     call->rxcall, &call->iter,
+						     false, &remote_abort,
 						     &call->service_id);
-			trace_afs_recv_data(call, 0, 0, false, ret);
+			trace_afs_receive_data(call, &call->iter, false, ret);
 
 			if (ret == -EINPROGRESS || ret == -EAGAIN)
 				return;
@@ -535,7 +534,7 @@ static void afs_deliver_to_call(struct afs_call *call)
 			if (state != AFS_CALL_CL_AWAIT_REPLY)
 				abort_code = RXGEN_SS_UNMARSHAL;
 			rxrpc_kernel_abort_call(call->net->socket, call->rxcall,
-						abort_code, -EBADMSG, "KUM");
+						abort_code, ret, "KUM");
 			goto local_abort;
 		}
 	}
@@ -747,6 +746,7 @@ void afs_charge_preallocation(struct work_struct *work)
 			call->async = true;
 			call->state = AFS_CALL_SV_AWAIT_OP_ID;
 			init_waitqueue_head(&call->waitq);
+			afs_extract_to_tmp(call);
 		}
 
 		if (rxrpc_kernel_charge_accept(net->socket,
@@ -792,18 +792,15 @@ static int afs_deliver_cm_op_id(struct afs_call *call)
 {
 	int ret;
 
-	_enter("{%zu}", call->offset);
-
-	ASSERTCMP(call->offset, <, 4);
+	_enter("{%zu}", iov_iter_count(call->_iter));
 
 	/* the operation ID forms the first four bytes of the request data */
-	ret = afs_extract_data(call, &call->tmp, 4, true);
+	ret = afs_extract_data(call, true);
 	if (ret < 0)
 		return ret;
 
 	call->operation_ID = ntohl(call->tmp);
 	afs_set_call_state(call, AFS_CALL_SV_AWAIT_OP_ID, AFS_CALL_SV_AWAIT_REQUEST);
-	call->offset = 0;
 
 	/* ask the cache manager to route the call (it'll change the call type
 	 * if successful) */
@@ -844,7 +841,7 @@ void afs_send_empty_reply(struct afs_call *call)
 
 	msg.msg_name		= NULL;
 	msg.msg_namelen		= 0;
-	iov_iter_kvec(&msg.msg_iter, WRITE | ITER_KVEC, NULL, 0, 0);
+	iov_iter_kvec(&msg.msg_iter, WRITE, NULL, 0, 0);
 	msg.msg_control		= NULL;
 	msg.msg_controllen	= 0;
 	msg.msg_flags		= 0;
@@ -883,7 +880,7 @@ void afs_send_simple_reply(struct afs_call *call, const void *buf, size_t len)
 	iov[0].iov_len		= len;
 	msg.msg_name		= NULL;
 	msg.msg_namelen		= 0;
-	iov_iter_kvec(&msg.msg_iter, WRITE | ITER_KVEC, iov, 1, len);
+	iov_iter_kvec(&msg.msg_iter, WRITE, iov, 1, len);
 	msg.msg_control		= NULL;
 	msg.msg_controllen	= 0;
 	msg.msg_flags		= 0;
@@ -907,30 +904,19 @@ void afs_send_simple_reply(struct afs_call *call, const void *buf, size_t len)
 /*
  * Extract a piece of data from the received data socket buffers.
  */
-int afs_extract_data(struct afs_call *call, void *buf, size_t count,
-		     bool want_more)
+int afs_extract_data(struct afs_call *call, bool want_more)
 {
 	struct afs_net *net = call->net;
-	struct iov_iter iter;
-	struct kvec iov;
+	struct iov_iter *iter = call->_iter;
 	enum afs_call_state state;
 	u32 remote_abort = 0;
 	int ret;
 
-	_enter("{%s,%zu},,%zu,%d",
-	       call->type->name, call->offset, count, want_more);
+	_enter("{%s,%zu},%d", call->type->name, iov_iter_count(iter), want_more);
 
-	ASSERTCMP(call->offset, <=, count);
-
-	iov.iov_base = buf + call->offset;
-	iov.iov_len = count - call->offset;
-	iov_iter_kvec(&iter, ITER_KVEC | READ, &iov, 1, count - call->offset);
-
-	ret = rxrpc_kernel_recv_data(net->socket, call->rxcall, &iter,
+	ret = rxrpc_kernel_recv_data(net->socket, call->rxcall, iter,
 				     want_more, &remote_abort,
 				     &call->service_id);
-	call->offset += (count - call->offset) - iov_iter_count(&iter);
-	trace_afs_recv_data(call, count, call->offset, want_more, ret);
 	if (ret == 0 || ret == -EAGAIN)
 		return ret;
 

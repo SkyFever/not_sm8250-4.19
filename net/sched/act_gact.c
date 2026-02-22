@@ -90,6 +90,11 @@ static int tcf_gact_init(struct net *net, struct nlattr *nla,
 		p_parm = nla_data(tb[TCA_GACT_PROB]);
 		if (p_parm->ptype >= MAX_RAND)
 			return -EINVAL;
+		if (TC_ACT_EXT_CMP(p_parm->paction, TC_ACT_GOTO_CHAIN)) {
+			NL_SET_ERR_MSG(extack,
+				       "goto chain not allowed on fallback");
+			return -EINVAL;
+		}
 	}
 #endif
 
@@ -224,8 +229,7 @@ static int tcf_gact_walker(struct net *net, struct sk_buff *skb,
 	return tcf_generic_walker(tn, skb, cb, type, ops, extack);
 }
 
-static int tcf_gact_search(struct net *net, struct tc_action **a, u32 index,
-			   struct netlink_ext_ack *extack)
+static int tcf_gact_search(struct net *net, struct tc_action **a, u32 index)
 {
 	struct tc_action_net *tn = net_generic(net, gact_net_id);
 

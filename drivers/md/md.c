@@ -8463,9 +8463,17 @@ void md_do_sync(struct md_thread *thread)
 		else if (!mddev->bitmap)
 			j = mddev->recovery_cp;
 
-	} else if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery))
+	} else if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery)) {
 		max_sectors = mddev->resync_max_sectors;
-	else {
+		/*
+		 * If the original node aborts reshaping then we continue the
+		 * reshaping, so set j again to avoid restart reshape from the
+		 * first beginning
+		 */
+		if (mddev_is_clustered(mddev) &&
+		    mddev->reshape_position != MaxSector)
+			j = mddev->reshape_position;
+	} else {
 		/* recovery follows the physical size of devices */
 		max_sectors = mddev->dev_sectors;
 		j = MaxSector;
@@ -8716,8 +8724,10 @@ void md_do_sync(struct md_thread *thread)
 		mddev_lock_nointr(mddev);
 		md_set_array_sectors(mddev, mddev->pers->size(mddev, 0, 0));
 		mddev_unlock(mddev);
-		set_capacity(mddev->gendisk, mddev->array_sectors);
-		revalidate_disk(mddev->gendisk);
+		if (!mddev_is_clustered(mddev)) {
+			set_capacity(mddev->gendisk, mddev->array_sectors);
+			revalidate_disk(mddev->gendisk);
+		}
 	}
 
 	spin_lock(&mddev->lock);
@@ -9062,6 +9072,8 @@ EXPORT_SYMBOL(md_check_recovery);
 void md_reap_sync_thread(struct mddev *mddev)
 {
 	struct md_rdev *rdev;
+	sector_t old_dev_sectors = mddev->dev_sectors;
+	bool is_reshaped = false;
 
 	/* resync has finished, collect result */
 	md_unregister_thread(&mddev->sync_thread);
@@ -9077,8 +9089,11 @@ void md_reap_sync_thread(struct mddev *mddev)
 		}
 	}
 	if (test_bit(MD_RECOVERY_RESHAPE, &mddev->recovery) &&
-	    mddev->pers->finish_reshape)
+	    mddev->pers->finish_reshape) {
 		mddev->pers->finish_reshape(mddev);
+		if (mddev_is_clustered(mddev))
+			is_reshaped = true;
+	}
 
 	/* If array is no-longer degraded, then any saved_raid_disk
 	 * information must be scrapped.
@@ -9099,6 +9114,14 @@ void md_reap_sync_thread(struct mddev *mddev)
 	clear_bit(MD_RECOVERY_RESHAPE, &mddev->recovery);
 	clear_bit(MD_RECOVERY_REQUESTED, &mddev->recovery);
 	clear_bit(MD_RECOVERY_CHECK, &mddev->recovery);
+	/*
+	 * We call md_cluster_ops->update_size here because sync_size could
+	 * be changed by md_update_sb, and MD_RECOVERY_RESHAPE is cleared,
+	 * so it is time to update size across cluster.
+	 */
+	if (mddev_is_clustered(mddev) && is_reshaped
+				      && !test_bit(MD_CLOSING, &mddev->flags))
+		md_cluster_ops->update_size(mddev, old_dev_sectors);
 	wake_up(&resync_wait);
 	/* flag recovery needed just to double check */
 	set_bit(MD_RECOVERY_NEEDED, &mddev->recovery);
@@ -9298,8 +9321,12 @@ static void check_sb_changes(struct mddev *mddev, struct md_rdev *rdev)
 		}
 
 		if (role != rdev2->raid_disk) {
-			/* got activated */
-			if (rdev2->raid_disk == -1 && role != 0xffff) {
+			/*
+			 * got activated except reshape is happening.
+			 */
+			if (rdev2->raid_disk == -1 && role != 0xffff &&
+			    !(le32_to_cpu(sb->feature_map) &
+			      MD_FEATURE_RESHAPE_ACTIVE)) {
 				rdev2->saved_raid_disk = role;
 				ret = remove_and_add_spares(mddev, rdev2);
 				pr_info("Activated spare: %s\n",
@@ -9326,6 +9353,30 @@ static void check_sb_changes(struct mddev *mddev, struct md_rdev *rdev)
 		ret = update_raid_disks(mddev, le32_to_cpu(sb->raid_disks));
 		if (ret)
 			pr_warn("md: updating array disks failed. %d\n", ret);
+	}
+
+	/*
+	 * Since mddev->delta_disks has already updated in update_raid_disks,
+	 * so it is time to check reshape.
+	 */
+	if (test_bit(MD_RESYNCING_REMOTE, &mddev->recovery) &&
+	    (le32_to_cpu(sb->feature_map) & MD_FEATURE_RESHAPE_ACTIVE)) {
+		/*
+		 * reshape is happening in the remote node, we need to
+		 * update reshape_position and call start_reshape.
+		 */
+		mddev->reshape_position = sb->reshape_position;
+		if (mddev->pers->update_reshape_pos)
+			mddev->pers->update_reshape_pos(mddev);
+		if (mddev->pers->start_reshape)
+			mddev->pers->start_reshape(mddev);
+	} else if (test_bit(MD_RESYNCING_REMOTE, &mddev->recovery) &&
+		   mddev->reshape_position != MaxSector &&
+		   !(le32_to_cpu(sb->feature_map) & MD_FEATURE_RESHAPE_ACTIVE)) {
+		/* reshape is just done in another node. */
+		mddev->reshape_position = MaxSector;
+		if (mddev->pers->update_reshape_pos)
+			mddev->pers->update_reshape_pos(mddev);
 	}
 
 	/* Finally set the event to be up to date */

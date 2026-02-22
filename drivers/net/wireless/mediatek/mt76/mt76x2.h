@@ -47,7 +47,7 @@
 #define MT_VIF_WCID(_n)		(254 - ((_n) & 7))
 
 #include "mt76.h"
-#include "mt76x2_regs.h"
+#include "mt76x02_regs.h"
 #include "mt76x2_mac.h"
 #include "mt76x2_dfs.h"
 
@@ -131,8 +131,6 @@ struct mt76x2_dev {
 
 	u16 chainmask;
 
-	u32 rxfilter;
-
 	struct mt76x2_calibration cal;
 
 	s8 target_power;
@@ -162,23 +160,6 @@ struct mt76x2_sta {
 	struct ewma_signal rssi;
 	int inactive_count;
 };
-
-static inline bool mt76x2_wait_for_mac(struct mt76x2_dev *dev)
-{
-	int i;
-
-	for (i = 0; i < 500; i++) {
-		switch (mt76_rr(dev, MT_MAC_CSR0)) {
-		case 0:
-		case ~0:
-			break;
-		default:
-			return true;
-		}
-		usleep_range(5000, 10000);
-	}
-	return false;
-}
 
 static inline bool is_mt7612(struct mt76x2_dev *dev)
 {
@@ -310,9 +291,6 @@ int mt76x2_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 		   struct ieee80211_key_conf *key);
 int mt76x2_conf_tx(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		   u16 queue, const struct ieee80211_tx_queue_params *params);
-void mt76x2_configure_filter(struct ieee80211_hw *hw,
-			     unsigned int changed_flags,
-			     unsigned int *total_flags, u64 multicast);
 void mt76x2_txq_init(struct mt76x2_dev *dev, struct ieee80211_txq *txq);
 void mt76x2_sta_rate_tbl_update(struct ieee80211_hw *hw,
 				struct ieee80211_vif *vif,
