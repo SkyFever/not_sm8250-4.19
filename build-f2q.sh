@@ -21,18 +21,18 @@ BOOT_DIR="$OUT_DIR/arch/arm64/boot"
 DTS_DIR="$BOOT_DIR/dts/vendor/qcom"
 
 if test -z "$(git rev-parse --show-cdup 2>/dev/null)" &&
-   head=$(git rev-parse --verify HEAD 2>/dev/null); then
-    ZIPNAME="${ZIPNAME::-4}-$(echo $head | cut -c1-8)-f2q.zip"
+  head=$(git rev-parse --verify HEAD 2>/dev/null); then
+    ZIPNAME="${ZIPNAME::-4}-$(echo $head | cut -c1-8)-f2q.zip"
 fi
 
 export PATH="$TC_DIR/bin:$PATH"
 
 if ! [ -d "$TC_DIR" ]; then
-    echo -e "${YELLOW}AOSP clang not found! Cloning to $TC_DIR...${NC}"
-    if ! git clone --depth=1 -b 18 https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone "$TC_DIR"; then
-        echo -e "${RED}Cloning failed! Aborting...${NC}"
-        exit 1
-    fi
+    echo -e "${YELLOW}AOSP clang not found! Cloning to $TC_DIR...${NC}"
+    if ! git clone --depth=1 -b 18 https://gitlab.com/ThankYouMario/android_prebuilts_clang-standalone "$TC_DIR"; then
+        echo -e "${RED}Cloning failed! Aborting...${NC}"
+        exit 1
+    fi
 fi
 
 mkdir -p out
@@ -50,10 +50,10 @@ echo -e "\n${YELLOW}Starting compilation...${NC}\n"
 #    LLVM=1 LLVM_IAS=1 dtbo.img
 
 make -j$(nproc --all) O=out ARCH=arm64 \
-    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
-    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-    LLVM=1 LLVM_IAS=1 dtbs
+    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
+    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+    LLVM=1 LLVM_IAS=1 dtbs
 
 echo -e "${BLUE}Generating customized dtbo.img for f2q...${NC}"
 
@@ -61,10 +61,10 @@ echo -e "${BLUE}Generating customized dtbo.img for f2q...${NC}"
 DTBO_LIST=$(find out/arch/arm64/boot/dts -name "*f2q*.dtbo" -o -name "kona-sec-system-update-overlay.dtbo" | sort)
 
 if [ -z "$DTBO_LIST" ]; then
-    echo -e "${RED}Error: No *f2q*.dtbo files found!${NC}"
-    echo "Listing .dtbo files found in out/arch/arm64/boot/dts:"
-    find out/arch/arm64/boot/dts -name "*.dtbo" | head -n 10
-    exit 1
+    echo -e "${RED}Error: No *f2q*.dtbo files found!${NC}"
+    echo "Listing .dtbo files found in out/arch/arm64/boot/dts:"
+    find out/arch/arm64/boot/dts -name "*.dtbo" | head -n 10
+    exit 1
 fi
 
 echo "Found dtbo files:"
@@ -74,52 +74,52 @@ echo "$DTBO_LIST"
 python3 scripts/mkdtboimg.py create "out/arch/arm64/boot/dtbo.img" --page_size=4096 $DTBO_LIST
 
 if [ $? -eq 0 ] && [ -s "out/arch/arm64/boot/dtbo.img" ]; then
-    echo -e "${GREEN}dtbo.img generated successfully! Size: $(du -h "out/arch/arm64/boot/dtbo.img" | cut -f1)${NC}"
+    echo -e "${GREEN}dtbo.img generated successfully! Size: $(du -h "out/arch/arm64/boot/dtbo.img" | cut -f1)${NC}"
 else
-    echo -e "${RED}Failed to create dtbo.img or file is empty!${NC}"
-    exit 1
+    echo -e "${RED}Failed to create dtbo.img or file is empty!${NC}"
+    exit 1
 fi
     
 make -j$(nproc --all) O=out ARCH=arm64 \
-    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
-    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-    LLVM=1 LLVM_IAS=1 Image
+    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
+    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+    LLVM=1 LLVM_IAS=1 Image
     
 if [ -f "$BOOT_DIR/Image" ]; then
-    echo -e "${GREEN}Kernel Image found!${NC}"
+    echo -e "${GREEN}Kernel Image found!${NC}"
 
-    mkdir -p boot_work
-    cp stock_boot.img boot_work/
-    cd boot_work
+    mkdir -p boot_work
+    cp stock_boot.img boot_work/
+    cd boot_work
 
-    magiskboot unpack stock_boot.img
+    magiskboot unpack stock_boot.img
 
-    cp "$BOOT_DIR/Image" kernel
+    cp "$BOOT_DIR/Image" kernel
 
-    magiskboot repack stock_boot.img ../boot.img
+    magiskboot repack stock_boot.img ../boot.img
 
-    cd ..
+    cd ..
 
-    cp boot.img "$BOOT_DIR/boot.img"
+    cp boot.img "$BOOT_DIR/boot.img"
     
-    if [ -d "$DTS_DIR" ]; then
-        echo -e "${BLUE}Generating dtb from $DTS_DIR...${NC}"
-        cat $(find "$DTS_DIR" -type f -name "*.dtb" | sort) > "$BOOT_DIR/kona.dtb"
+    if [ -d "$DTS_DIR" ]; then
+        echo -e "${BLUE}Generating dtb from $DTS_DIR...${NC}"
+        cat $(find "$DTS_DIR" -type f -name "*.dtb" | sort) > "$BOOT_DIR/kona.dtb"
         
-        if [ -f "$BOOT_DIR/kona.dtb" ]; then
-            echo -e "${GREEN}dtb generated successfully!${NC}"
-        else
-            echo -e "${RED}Failed to generate kona.dtb! Check if dtbs were compiled.${NC}"
-            exit 1
-        fi
-    else
-        echo -e "${RED}DTS directory not found. Compilation might be incomplete.${NC}"
-        exit 1
-    fi
+        if [ -f "$BOOT_DIR/kona.dtb" ]; then
+            echo -e "${GREEN}dtb generated successfully!${NC}"
+        else
+            echo -e "${RED}Failed to generate kona.dtb! Check if dtbs were compiled.${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}DTS directory not found. Compilation might be incomplete.${NC}"
+        exit 1
+    fi
 else
-    echo -e "\n${RED}Compilation failed! Image not found.${NC}"
-    exit 1
+    echo -e "\n${RED}Compilation failed! Image not found.${NC}"
+    exit 1
 fi
 
 rm -rf AnyKernel3
