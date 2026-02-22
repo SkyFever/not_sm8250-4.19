@@ -28,8 +28,48 @@ jobs:
 
       - name: Setting up the environment
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential flex libelf-dev \
+            libssl-dev libncurses-dev python3 zstd \
+            clang-14 lld-14 llvm-14 \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi
+          
+          sudo ln -sf /usr/bin/clang-14    /usr/local/bin/clang
+          sudo ln -sf /usr/bin/ld.lld-14   /usr/local/bin/ld.lld
+          sudo ln -sf /usr/bin/llvm-ar-14  /usr/local/bin/llvm-ar
+          sudo ln -sf /usr/bin/llvm-nm-14  /usr/local/bin/llvm-nm
+          sudo ln -sf /usr/bin/llvm-objcopy-14  /usr/local/bin/llvm-objcopy
+          sudo ln -sf /usr/bin/llvm-objdump-14  /usr/local/bin/llvm-objdump
+          sudo ln -sf /usr/bin/llvm-strip-14    /usr/local/bin/llvm-strip
+
+      - name: Install mkdtboimg
+        run: |
+          # -o 없이 stdout으로 받아서 base64 디코딩
+          curl -s \
+            "https://android.googlesource.com/platform/system/libufdt/+/refs/heads/master/utils/src/mkdtboimg.py?format=TEXT" \
+            | base64 -d > /usr/local/bin/mkdtboimg
+          chmod +x /usr/local/bin/mkdtboimg
+          # 정상 설치 확인
+          head -1 /usr/local/bin/mkdtboimg   # #!/usr/bin/env python3 이 나와야 함
+
+      - name: Setup magiskboot
+        run: |
+          curl -Lo magiskboot \
+            "https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk"
+          # apk는 zip이라 안에서 magiskboot만 추출
+          unzip -o magiskboot -d magisk_tmp 'lib/x86_64/libmagiskboot.so'
+          cp magisk_tmp/lib/x86_64/libmagiskboot.so /usr/local/bin/magiskboot
+          chmod +x /usr/local/bin/magiskboot
+
+      - name: Install avbtool
+        run: |
+          # raw 파일 직접 다운로드
+          curl -Lo /usr/local/bin/avbtool \
+            "https://raw.githubusercontent.com/LineageOS/android_external_avb/refs/heads/lineage-23.2/avbtool.py"
+          sudo chmod +x /usr/local/bin/avbtool
+          avbtool version
 
       - name: Set Build Start Time
         run: echo "START_TIME=$(date +%s)" >> $GITHUB_ENV
