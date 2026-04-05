@@ -44,10 +44,13 @@ make O=out ARCH=arm64 olddefconfig
 echo -e "\n${YELLOW}Starting compilation...${NC}\n"
 
 make -j$(nproc --all) O=out ARCH=arm64 \
-    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
-    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-    LLVM=1 LLVM_IAS=1 dtbo.img
+    CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
+    OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
+    CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+    LLVM=1 LLVM_IAS=1 dtbs   # ← dtbo.img 대신 dtbs
+
+python3 scripts/mkdtboimg.py create "$BOOT_DIR/dtbo.img" --page_size=4096 \
+    $(find "$BOOT_DIR/dts" -name "*.dtbo" | sort)
 
 make -j$(nproc --all) O=out ARCH=arm64 \
     CC=clang LD=ld.lld AS=llvm-as AR=llvm-ar NM=llvm-nm \
